@@ -26,6 +26,8 @@ from .confidence import (
 )
 from .matching import get_confidence_aware_marginals, geco_match
 from .keypoints import transfer_keypoint
+from .propagation import SeedAnnotation, PropagatedKeypoint, propagate_keypoints
+from .anomaly import AnomalyResult, detect_anomalies
 
 __all__ = [
     "load_dinov2",
@@ -37,6 +39,11 @@ __all__ = [
     "get_confidence_aware_marginals",
     "geco_match",
     "transfer_keypoint",
+    "SeedAnnotation",
+    "PropagatedKeypoint",
+    "propagate_keypoints",
+    "AnomalyResult",
+    "detect_anomalies",
 ]
 
 __version__ = "0.1.0"

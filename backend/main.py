@@ -31,7 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from geco.features import get_device, load_dinov2  # noqa: E402
 from geco.keypoints import transfer_keypoint  # noqa: E402
 from geco.matching import MatchResult, geco_match  # noqa: E402
-from geco.visualize import render_confidence_heatmap, render_match_heatmap, render_pca_map  # noqa: E402
+from geco.visualize import (  # noqa: E402
+    render_anomaly_heatmap,
+    render_confidence_heatmap,
+    render_match_heatmap,
+    render_pca_map,
+)
+from geco.propagation import SeedAnnotation, propagate_keypoints  # noqa: E402
+from geco.anomaly import detect_anomalies  # noqa: E402
 
 app = FastAPI(title="GECO-Enhanced API", version="0.1.0")
 
@@ -172,3 +179,98 @@ def match_heatmap(session_id: str, patch_x: int, patch_y: int):
         result.transport_plan[patch_idx], grid, f"Patch ({patch_x},{patch_y}) -> target"
     )
     return {"heatmap_png": png}
+
+
+# ── Component 2 / Track A — Sparse-to-Dense Annotation Propagation ──────────
+
+
+class SeedKeypointIn(BaseModel):
+    name: str
+    x: int
+    y: int
+
+
+class PropagatedKeypointOut(BaseModel):
+    name: str
+    x: int
+    y: int
+    confidence: float
+    cycle_error: float
+    n_votes: int
+    accepted: bool
+
+
+@app.post("/api/propagate", response_model=list[PropagatedKeypointOut])
+async def propagate(
+    target_image: UploadFile = File(...),
+    seed_images: list[UploadFile] = File(...),
+    seed_keypoints_json: list[str] = Form(...),  # one JSON array of {name,x,y} per seed image
+    confidence_threshold: float = Form(0.15),
+    cycle_error_threshold: float = Form(40.0),
+):
+    """Propagate keypoints from N labeled seed images onto one unlabeled target image."""
+    import json
+
+    if len(seed_images) != len(seed_keypoints_json):
+        raise HTTPException(
+            status_code=400, detail="seed_images and seed_keypoints_json must be the same length."
+        )
+
+    model = _get_model()
+    target_img = Image.open(io.BytesIO(await target_image.read())).convert("RGB")
+
+    seeds = []
+    for upload, kp_json in zip(seed_images, seed_keypoints_json):
+        img = Image.open(io.BytesIO(await upload.read())).convert("RGB")
+        kps = {kp["name"]: (kp["x"], kp["y"]) for kp in json.loads(kp_json)}
+        seeds.append(SeedAnnotation(image=img, keypoints=kps))
+
+    results = propagate_keypoints(
+        model,
+        seeds,
+        target_img,
+        confidence_threshold=confidence_threshold,
+        cycle_error_threshold=cycle_error_threshold,
+    )
+    return [
+        PropagatedKeypointOut(
+            name=r.name,
+            x=r.pixel[0],
+            y=r.pixel[1],
+            confidence=r.confidence,
+            cycle_error=r.cycle_error,
+            n_votes=r.n_votes,
+            accepted=r.accepted,
+        )
+        for r in results
+    ]
+
+
+# ── Component 2 / Track B — Correspondence-Guided Anomaly Detection ─────────
+
+
+class AnomalyResponse(BaseModel):
+    anomaly_score: float
+    anomaly_heatmap_png: str
+    n_dustbin_patches: int
+    grid_size: int
+
+
+@app.post("/api/anomaly", response_model=AnomalyResponse)
+async def anomaly(
+    test_image: UploadFile = File(...),
+    reference_image: UploadFile = File(...),
+):
+    """Score a test image for anomalies relative to a golden reference image."""
+    model = _get_model()
+    test_img = Image.open(io.BytesIO(await test_image.read())).convert("RGB")
+    ref_img = Image.open(io.BytesIO(await reference_image.read())).convert("RGB")
+
+    result = detect_anomalies(model, test_img, ref_img)
+
+    return AnomalyResponse(
+        anomaly_score=result.anomaly_score,
+        anomaly_heatmap_png=render_anomaly_heatmap(result.anomaly_map),
+        n_dustbin_patches=int(result.dustbin_mask.sum().item()),
+        grid_size=result.match.grid_size,
+    )

@@ -55,6 +55,16 @@ def render_pca_map(feature_map: torch.Tensor, title: str) -> str:
     return _fig_to_base64(fig)
 
 
+def render_anomaly_heatmap(anomaly_map: torch.Tensor, title: str = "Anomaly score") -> str:
+    """Render a Component 2 / Track B anomaly map (values in [0, 1], 1 = most anomalous)."""
+    fig, ax = plt.subplots(figsize=(4, 4))
+    im = ax.imshow(anomaly_map.cpu().numpy(), cmap="inferno", vmin=0, vmax=1)
+    ax.set_title(title)
+    ax.axis("off")
+    fig.colorbar(im, ax=ax, fraction=0.046)
+    return _fig_to_base64(fig)
+
+
 def render_match_heatmap(match_row: torch.Tensor, grid_size: int, title: str) -> str:
     """Visualize where a single source patch's transport mass lands in the target grid."""
     heat = match_row[:-1].reshape(grid_size, grid_size).cpu().float().numpy()
