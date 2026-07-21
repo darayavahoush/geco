@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.env
+
+# Model / data
+*.pth
+*.ckpt
+datasets/
+.cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Env
+.env

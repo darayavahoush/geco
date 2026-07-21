@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geco-enhanced"
+version = "0.1.0"
+description = "Confidence-aware semantic correspondence via DINOv2 features and Optimal Transport"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "POT>=0.9.1",
+    "scikit-learn>=1.3",
+    "matplotlib>=3.7",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
