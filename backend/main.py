@@ -23,6 +23,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
@@ -274,3 +275,11 @@ async def anomaly(
         n_dustbin_patches=int(result.dustbin_mask.sum().item()),
         grid_size=result.match.grid_size,
     )
+
+
+# ── Serve the built React frontend (combined single-container deployment) ──
+# In local dev you run the Vite dev server separately and this path won't
+# exist, so the mount is skipped and only the API is served on :8000.
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.exists():
+    app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="frontend")
