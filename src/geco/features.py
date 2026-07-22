@@ -19,7 +19,8 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 _preprocess = transforms.Compose(
     [
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.Resize(IMG_SIZE),  # scales shorter side to IMG_SIZE, preserving aspect ratio
+        transforms.CenterCrop(IMG_SIZE),
         transforms.ToTensor(),
         transforms.Normalize(mean=_IMAGENET_MEAN, std=_IMAGENET_STD),
     ]

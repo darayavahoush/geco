@@ -40,8 +40,16 @@ def get_confidence_aware_marginals(
     mu_patches = ((1 - alpha) * uniform_src + alpha * conf_src_norm) * mass
     nu_patches = ((1 - alpha) * uniform_trg + alpha * conf_trg_norm) * mass
 
-    mu = torch.cat([mu_patches, torch.tensor([1 - mass], device=conf_src.device)])
-    nu = torch.cat([nu_patches, torch.tensor([1 - mass], device=conf_trg.device)])
+    # The dustbin's marginal mass must be comparable to ONE patch's mass, not a fixed
+    # lump of the whole distribution — otherwise it dominates every row/column of the
+    # transport plan regardless of match quality, and everything gets routed there.
+    src_dustbin_mass = mu_patches.mean()
+    trg_dustbin_mass = nu_patches.mean()
+
+    mu = torch.cat([mu_patches, src_dustbin_mass.reshape(1)])
+    nu = torch.cat([nu_patches, trg_dustbin_mass.reshape(1)])
+    mu = mu / mu.sum()
+    nu = nu / nu.sum()
     return mu, nu
 
 
