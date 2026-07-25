@@ -97,7 +97,7 @@ def propagate_keypoints(
     model: torch.nn.Module,
     seeds: list[SeedAnnotation],
     target_img: Image.Image,
-    confidence_threshold: float = 0.15,
+    confidence_threshold: float = 0.10,
     cycle_error_threshold: float = 40.0,  # pixels, in IMG_SIZE (518) space
     geometric_residual_threshold: float = 25.0,  # pixels, affine-fit residual tolerance
     match_kwargs: dict | None = None,

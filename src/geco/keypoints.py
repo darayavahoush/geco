@@ -14,7 +14,7 @@ class KeypointMatch:
     trg_pixel: tuple[int, int]
     src_patch: tuple[int, int]
     trg_patch: tuple[int, int]
-    confidence: float  # transport-plan mass assigned to the best match
+    confidence: float  # fraction of this patch's OWN transport mass that went to its best match (0-1)
     is_dustbin: bool  # True if the model thinks there is no confident match
 
 
@@ -52,11 +52,19 @@ def transfer_keypoint(
     px = int((trg_patch_x * PATCH_SIZE + PATCH_SIZE / 2) / scale)
     py = int((trg_patch_y * PATCH_SIZE + PATCH_SIZE / 2) / scale)
 
+    # Raw transport-plan mass in a row scales as ~1/N (probability spread over N patches +
+    # dustbin), so it's meaningless as an absolute "confidence" — a perfect match on a
+    # 1369-patch grid would still only carry ~0.0007 raw mass. Normalize by the row's own
+    # total so confidence means "how much of THIS patch's assigned mass is concentrated on
+    # its best match" — a proper 0-1 score independent of grid size.
+    row_sum = match_row.sum().item()
+    normalized_confidence = match_row.max().item() / (row_sum + 1e-8)
+
     return KeypointMatch(
         src_pixel=(pixel_x, pixel_y),
         trg_pixel=(px, py),
         src_patch=(patch_x, patch_y),
         trg_patch=(trg_patch_x, trg_patch_y),
-        confidence=match_row.max().item(),
+        confidence=normalized_confidence,
         is_dustbin=is_dustbin,
     )

@@ -58,6 +58,32 @@ def preprocess_image(img: Image.Image, device: torch.device | None = None) -> to
     return tensor
 
 
+def map_point_to_model_space(
+    x: float, y: float, orig_width: int, orig_height: int, image_size: int = IMG_SIZE
+) -> tuple[float, float] | None:
+    """Map a pixel coordinate in an original image to this model's resize+center-crop space.
+
+    Mirrors the Resize(shorter side to image_size) + CenterCrop(image_size)
+    pipeline in `_preprocess`, so ground-truth keypoints from a benchmark
+    dataset land in the same coordinate space as the model's patch grid.
+
+    Returns None if the point falls outside the center crop (i.e. it was in
+    a part of the image discarded by cropping) — evaluation code should skip
+    such points rather than silently score against a garbage location.
+    """
+    scale = image_size / min(orig_width, orig_height)
+    new_w, new_h = orig_width * scale, orig_height * scale
+    crop_x0 = (new_w - image_size) / 2
+    crop_y0 = (new_h - image_size) / 2
+
+    mapped_x = x * scale - crop_x0
+    mapped_y = y * scale - crop_y0
+
+    if not (0 <= mapped_x < image_size and 0 <= mapped_y < image_size):
+        return None
+    return mapped_x, mapped_y
+
+
 def extract_multiscale_features(
     model: torch.nn.Module,
     img_tensor: torch.Tensor,

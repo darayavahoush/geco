@@ -139,7 +139,10 @@ def geco_match(
     transport_plan = torch.tensor(transport_plan, device=device)
 
     entropy = -(transport_plan * torch.log(transport_plan + 1e-8)).sum().item()
-    mean_conf = transport_plan[:-1, :-1].max(dim=1)[0].mean().item()
+    patch_rows = transport_plan[:-1, :-1]  # exclude the dustbin row/column
+    row_sums = patch_rows.sum(dim=1, keepdim=True)
+    normalized_rows = patch_rows / (row_sums + 1e-8)
+    mean_conf = normalized_rows.max(dim=1)[0].mean().item()
 
     return MatchResult(
         transport_plan=transport_plan,
