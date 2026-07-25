@@ -26,6 +26,7 @@ from .confidence import (
 )
 from .matching import get_confidence_aware_marginals, geco_match
 from .keypoints import transfer_keypoint
+from .geometry import fit_affine_ransac, AffineFitResult
 from .propagation import SeedAnnotation, PropagatedKeypoint, propagate_keypoints
 from .anomaly import AnomalyResult, detect_anomalies
 
@@ -39,6 +40,8 @@ __all__ = [
     "get_confidence_aware_marginals",
     "geco_match",
     "transfer_keypoint",
+    "fit_affine_ransac",
+    "AffineFitResult",
     "SeedAnnotation",
     "PropagatedKeypoint",
     "propagate_keypoints",

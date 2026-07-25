@@ -198,6 +198,7 @@ class PropagatedKeypointOut(BaseModel):
     confidence: float
     cycle_error: float
     n_votes: int
+    geometric_inlier: bool
     accepted: bool
 
 
@@ -208,6 +209,7 @@ async def propagate(
     seed_keypoints_json: list[str] = Form(...),  # one JSON array of {name,x,y} per seed image
     confidence_threshold: float = Form(0.15),
     cycle_error_threshold: float = Form(40.0),
+    geometric_residual_threshold: float = Form(25.0),
 ):
     """Propagate keypoints from N labeled seed images onto one unlabeled target image."""
     import json
@@ -232,6 +234,7 @@ async def propagate(
         target_img,
         confidence_threshold=confidence_threshold,
         cycle_error_threshold=cycle_error_threshold,
+        geometric_residual_threshold=geometric_residual_threshold,
     )
     return [
         PropagatedKeypointOut(
@@ -241,6 +244,7 @@ async def propagate(
             confidence=r.confidence,
             cycle_error=r.cycle_error,
             n_votes=r.n_votes,
+            geometric_inlier=r.geometric_inlier,
             accepted=r.accepted,
         )
         for r in results
@@ -255,25 +259,27 @@ class AnomalyResponse(BaseModel):
     anomaly_heatmap_png: str
     n_dustbin_patches: int
     grid_size: int
+    n_references: int
 
 
 @app.post("/api/anomaly", response_model=AnomalyResponse)
 async def anomaly(
     test_image: UploadFile = File(...),
-    reference_image: UploadFile = File(...),
+    reference_images: list[UploadFile] = File(...),
 ):
-    """Score a test image for anomalies relative to a golden reference image."""
+    """Score a test image for anomalies relative to one or more golden reference images."""
     model = _get_model()
     test_img = Image.open(io.BytesIO(await test_image.read())).convert("RGB")
-    ref_img = Image.open(io.BytesIO(await reference_image.read())).convert("RGB")
+    ref_imgs = [Image.open(io.BytesIO(await f.read())).convert("RGB") for f in reference_images]
 
-    result = detect_anomalies(model, test_img, ref_img)
+    result = detect_anomalies(model, test_img, ref_imgs)
 
     return AnomalyResponse(
         anomaly_score=result.anomaly_score,
         anomaly_heatmap_png=render_anomaly_heatmap(result.anomaly_map),
         n_dustbin_patches=int(result.dustbin_mask.sum().item()),
         grid_size=result.match.grid_size,
+        n_references=result.n_references,
     )
 
 

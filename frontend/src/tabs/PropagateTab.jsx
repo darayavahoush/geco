@@ -166,6 +166,7 @@ export default function PropagateTab() {
                 <th>confidence</th>
                 <th>cycle error (px)</th>
                 <th>votes</th>
+                <th>geometry</th>
                 <th>status</th>
               </tr>
             </thead>
@@ -176,6 +177,11 @@ export default function PropagateTab() {
                   <td className="mono">{(r.confidence * 100).toFixed(1)}%</td>
                   <td className="mono">{r.cycle_error.toFixed(1)}</td>
                   <td className="mono">{r.n_votes}</td>
+                  <td>
+                    <span className={`status-pill ${r.geometric_inlier ? "" : "status-error"}`}>
+                      {r.geometric_inlier ? "consistent" : "outlier"}
+                    </span>
+                  </td>
                   <td>
                     <span className={`status-pill ${r.accepted ? "" : "status-error"}`}>
                       {r.accepted ? "accepted" : "rejected"}

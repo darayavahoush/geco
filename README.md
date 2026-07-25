@@ -1,3 +1,13 @@
+---
+title: GECO
+emoji: 🐱
+colorFrom: blue
+colorTo: red
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # GECO-Enhanced — Confidence-Aware Semantic Correspondence
 
 Find semantic keypoint correspondences between two images of the same object

@@ -67,7 +67,7 @@ export async function runPropagate({ targetFile, seeds, confidenceThreshold, cyc
 export async function runAnomaly({ testFile, referenceFile }) {
   const form = new FormData();
   form.append("test_image", testFile);
-  form.append("reference_image", referenceFile);
+  form.append("reference_images", referenceFile);
 
   const res = await fetch(`${API_URL}/api/anomaly`, { method: "POST", body: form });
   if (!res.ok) {
