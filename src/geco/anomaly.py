@@ -73,13 +73,17 @@ def _patch_appearance_cost(
 def _score_against_one_reference(
     model: torch.nn.Module, test_img: Image.Image, reference_img: Image.Image, match_kwargs: dict
 ) -> tuple[MatchResult, torch.Tensor, torch.Tensor]:
-    """Returns (match_result, combined_anomaly_map [H,W], dustbin_mass [N])."""
+    """Returns (match_result, combined_anomaly_map [H,W], dustbin_fraction [N])."""
     result = geco_match(model, test_img, reference_img, **match_kwargs)
     grid = result.grid_size
     n_patches = grid * grid
 
-    dustbin_mass = result.transport_plan[:n_patches, -1]
-    dustbin_mass = dustbin_mass / (dustbin_mass.max() + 1e-8)
+    # Row-normalize dustbin mass by each patch's OWN total row mass (same fix as the
+    # keypoint-confidence bug: raw transport mass scales as ~1/N and isn't comparable
+    # across grid sizes or images). This gives "what fraction of THIS patch's mass went
+    # to the dustbin" -- a proper 0-1 value, independent of per-pair rescaling.
+    row_sums = result.transport_plan[:n_patches, :].sum(dim=1)
+    dustbin_fraction = result.transport_plan[:n_patches, -1] / (row_sums + 1e-8)
 
     best_sim = result.cos_sim.max(dim=1).values
     match_cost = (1 - best_sim) / 2
@@ -89,10 +93,15 @@ def _score_against_one_reference(
     ref_tensor = preprocess_image(reference_img, device)
     appearance_cost = _patch_appearance_cost(test_tensor, ref_tensor, result.cos_sim, grid)
 
-    combined = 0.4 * dustbin_mass + 0.3 * match_cost + 0.3 * appearance_cost
-    combined = (combined - combined.min()) / (combined.max() - combined.min() + 1e-8)
+    # NOTE: deliberately NOT min-max normalized here. All three components are already
+    # naturally scaled to ~[0, 1] (dustbin_fraction and appearance_cost are exact, match_cost
+    # is a cosine-derived ratio). Per-pair min-max rescaling would stretch every pair to fill
+    # the full 0-1 range regardless of whether it's a great or terrible match overall --
+    # destroying the cross-pair comparability that anomaly SCORING requires (a bad pair should
+    # read as a higher absolute score than a good pair, not just "highest within itself").
+    combined = 0.4 * dustbin_fraction + 0.3 * match_cost + 0.3 * appearance_cost
 
-    return result, combined.reshape(grid, grid), dustbin_mass
+    return result, combined.reshape(grid, grid), dustbin_fraction
 
 
 def detect_anomalies(
