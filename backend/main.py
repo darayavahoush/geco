@@ -29,7 +29,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from geco.features import get_device, load_dinov2  # noqa: E402
+from geco.features import get_device, load_dinov2, IMG_SIZE  # noqa: E402
 from geco.keypoints import transfer_keypoint  # noqa: E402
 from geco.matching import MatchResult, geco_match  # noqa: E402
 from geco.visualize import (  # noqa: E402
@@ -280,6 +280,127 @@ async def anomaly(
         n_dustbin_patches=int(result.dustbin_mask.sum().item()),
         grid_size=result.match.grid_size,
         n_references=result.n_references,
+    )
+
+
+# ── Cross-Model Trust — DINOv2/DINOv1/CLIP agreement as a free uncertainty signal ──
+# Curated to dinov2+dino1 by default: the category sweep showed adding CLIP as a
+# third member actively DILUTES the ensemble (avg gap 0.232 -> 0.282 without it,
+# win-rate 7/18 -> 9/18) rather than helping, despite naive intuition that more
+# independent models = more signal.
+_cross_model_registry: dict = {}  # lazily populated, {name: (match_fn, image_size)}
+
+
+def _get_cross_model_registry(selected: list[str]):
+    from geco.cross_model import geco_match_v2, geco_match_dino1, geco_match_clip
+
+    missing = [m for m in selected if m not in _cross_model_registry]
+    for name in missing:
+        if name == "dinov2":
+            m = _get_model()
+            _cross_model_registry["dinov2"] = (lambda s, t, m=m: geco_match_v2(m, s, t), IMG_SIZE)
+        elif name == "dino1":
+            from geco.features_dino1 import load_dino1, IMG_SIZE_DINO1
+
+            m = load_dino1()
+            _cross_model_registry["dino1"] = (lambda s, t, m=m: geco_match_dino1(m, s, t), IMG_SIZE_DINO1)
+        elif name == "clip":
+            from geco.features_clip import load_clip, IMG_SIZE_CLIP
+
+            m, p = load_clip()
+            _cross_model_registry["clip"] = (
+                lambda s, t, m=m, p=p: geco_match_clip(m, p, s, t),
+                IMG_SIZE_CLIP,
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown model '{name}'")
+    return {k: v for k, v in _cross_model_registry.items() if k in selected}
+
+
+class CrossModelPredictionOut(BaseModel):
+    model: str
+    x: float
+    y: float
+    confidence: float
+    is_dustbin: bool
+
+
+class CrossModelMatchResponse(BaseModel):
+    predictions: list[CrossModelPredictionOut]
+    agreement_px: float
+    centroid_x: float
+    centroid_y: float
+    trust: str  # "high" | "medium" | "low" -- rough bucketing, tune against your own image scale
+
+
+@app.post("/api/cross-model-match", response_model=CrossModelMatchResponse)
+async def cross_model_match(
+    src_image: UploadFile = File(...),
+    trg_image: UploadFile = File(...),
+    pixel_x: float = Form(...),
+    pixel_y: float = Form(...),
+    models: str = Form("dinov2,dino1"),
+):
+    """Transfer one clicked point through several independent backbones and report
+    their agreement as a free, training-free trust signal (no fine-tuning, no labels).
+
+    pixel_x/pixel_y are in the ORIGINAL uploaded source image's pixel space (not any
+    model's internal crop) -- send whatever coordinate the browser reports on the
+    natural (unscaled) image, no need to know any model's internal input size.
+    """
+    from geco.cross_model import transfer_and_map, mean_pairwise_distance
+
+    selected = [m.strip() for m in models.split(",") if m.strip()]
+    if len(selected) < 2:
+        raise HTTPException(status_code=400, detail="Need at least 2 models to compute agreement.")
+
+    registry = _get_cross_model_registry(selected)
+    src_img = Image.open(io.BytesIO(await src_image.read())).convert("RGB")
+    trg_img = Image.open(io.BytesIO(await trg_image.read())).convert("RGB")
+
+    results = {name: fn(src_img, trg_img) for name, (fn, _) in registry.items()}
+
+    predictions: list[CrossModelPredictionOut] = []
+    points: list[tuple[float, float]] = []
+    for name, (_, image_size) in registry.items():
+        out = transfer_and_map(
+            results[name], image_size, (pixel_x, pixel_y),
+            src_img.width, src_img.height, trg_img.width, trg_img.height,
+        )
+        if out is None:
+            continue  # point fell outside this model's crop
+        (tx, ty), conf, is_dustbin = out
+        predictions.append(CrossModelPredictionOut(model=name, x=tx, y=ty, confidence=conf, is_dustbin=is_dustbin))
+        points.append((tx, ty))
+
+    if len(points) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail="Fewer than 2 models produced a valid prediction (point may be outside crop for some models).",
+        )
+
+    agreement_px = mean_pairwise_distance(points)
+    centroid_x = sum(p[0] for p in points) / len(points)
+    centroid_y = sum(p[1] for p in points) / len(points)
+
+    # NOTE: these thresholds are a rough starting point, not calibrated against a
+    # labeled validation set. Before using "trust" as a real accept/reject gate,
+    # calibrate them the same way propagation.py's confidence_threshold was tuned
+    # -- via a coverage/accuracy sweep on held-out labeled pairs (see
+    # scripts/eval/sweep_propagation_thresholds.py for the pattern to reuse).
+    if agreement_px < 20:
+        trust = "high"
+    elif agreement_px < 60:
+        trust = "medium"
+    else:
+        trust = "low"
+
+    return CrossModelMatchResponse(
+        predictions=predictions,
+        agreement_px=agreement_px,
+        centroid_x=centroid_x,
+        centroid_y=centroid_y,
+        trust=trust,
     )
 
 

@@ -1,18 +1,24 @@
 import { useEffect, useState } from "react";
+import OverviewTab from "./tabs/OverviewTab.jsx";
 import MatchTab from "./tabs/MatchTab.jsx";
 import PropagateTab from "./tabs/PropagateTab.jsx";
 import AnomalyTab from "./tabs/AnomalyTab.jsx";
+import TrustTab from "./tabs/TrustTab.jsx";
+import ResearchTab from "./tabs/ResearchTab.jsx";
 import { checkHealth } from "./api";
 import "./App.css";
 
 const TABS = [
+  { id: "overview", label: "Overview", component: OverviewTab },
   { id: "match", label: "Component 1 — Match", component: MatchTab },
   { id: "propagate", label: "Component 2A — Propagate", component: PropagateTab },
   { id: "anomaly", label: "Component 2B — Anomaly", component: AnomalyTab },
+  { id: "trust", label: "Cross-Model Trust", component: TrustTab },
+  { id: "research", label: "Research", component: ResearchTab },
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("match");
+  const [activeTab, setActiveTab] = useState("overview");
   const [backendStatus, setBackendStatus] = useState("checking");
 
   useEffect(() => {
@@ -26,7 +32,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="app-header-left">
+        <div className="app-header-left" onClick={() => setActiveTab("overview")} style={{ cursor: "pointer" }}>
           <span className="logo-mark">GC</span>
           <div>
             <h1>GECO</h1>
@@ -51,11 +57,11 @@ export default function App() {
       </nav>
 
       <main className="app-main">
-        <ActiveComponent />
+        {activeTab === "overview" ? <ActiveComponent onNavigate={setActiveTab} /> : <ActiveComponent />}
       </main>
 
       <footer className="app-footer">
-        <span>GECO-Enhanced — Component 1: correspondence engine. Component 2: propagation (A) + anomaly detection (B).</span>
+        <span>GECO-Enhanced — correspondence engine, propagation, anomaly detection, and cross-model trust.</span>
       </footer>
     </div>
   );

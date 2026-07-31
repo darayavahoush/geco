@@ -76,3 +76,20 @@ export async function runAnomaly({ testFile, referenceFile }) {
   }
   return res.json();
 }
+
+// ── Cross-Model Trust — DINOv2/DINOv1(/CLIP) agreement as a free uncertainty signal ──
+export async function runCrossModelMatch({ srcFile, trgFile, pixelX, pixelY, models = "dinov2,dino1" }) {
+  const form = new FormData();
+  form.append("src_image", srcFile);
+  form.append("trg_image", trgFile);
+  form.append("pixel_x", pixelX);
+  form.append("pixel_y", pixelY);
+  form.append("models", models);
+
+  const res = await fetch(`${API_URL}/api/cross-model-match`, { method: "POST", body: form });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Cross-model match failed (${res.status}): ${detail}`);
+  }
+  return res.json();
+}
