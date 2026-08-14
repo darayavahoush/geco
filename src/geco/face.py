@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 
-from .features import extract_multiscale_features, get_device, load_dinov2, preprocess_image
+from .features import get_device, load_dinov2, preprocess_image
 
 EMBEDDING_DIM = 128  # final face embedding size, after the projection head
 
@@ -49,16 +49,31 @@ class FaceEmbedder:
         self.backbone = load_dinov2(device=self.device)
         self.head = (head or FaceProjectionHead()).to(self.device)
 
+    def _global_embedding(self, tensor: torch.Tensor) -> torch.Tensor:
+        """DINOv2's own image-level embedding (the CLS token from a direct forward pass),
+        NOT a mean-pool of extract_multiscale_features' patch grid.
+
+        extract_multiscale_features() calls get_intermediate_layers(..., return_class_token=False)
+        -- it only ever returns patch tokens, no CLS token exists in its output. Mean-pooling
+        those patches averages away exactly the fine identity detail (eye/nose shape) that
+        distinguishes faces, leaving mostly coarse, similar-across-photos signal (lighting,
+        framing) -- that's what was causing the projection head to collapse to a single point
+        (triplet_loss stuck exactly at the margin). Calling the backbone directly gives DINOv2's
+        native global embedding, the standard way DINO is used for image-level tasks like
+        identity/classification (as opposed to the patch-grid features the rest of this
+        project correctly uses for spatial correspondence).
+        """
+        with torch.no_grad():
+            return self.backbone(tensor)  # [1, 768] -- CLS token, DINOv2's pooled output
+
     def embed(self, img: Image.Image) -> torch.Tensor:
         """Returns a single [EMBEDDING_DIM] L2-normalized embedding for one face image."""
         tensor = preprocess_image(img, self.device)
-        with torch.no_grad():
-            fused, _ = extract_multiscale_features(self.backbone, tensor)
-        pooled = fused.mean(dim=(2, 3))  # global average pool -> [1, 768]
+        pooled = self._global_embedding(tensor)
         return self.head(pooled).squeeze(0)
 
     def embed_batch_from_tensors(self, pooled_feats: torch.Tensor) -> torch.Tensor:
-        """For training: takes PRECOMPUTED pooled backbone features [B, 768] (since the
+        """For training: takes PRECOMPUTED global backbone embeddings [B, 768] (since the
         backbone is frozen, its output is fixed per-image and worth caching once rather
         than rerunning on every training step -- see train_face_embedding.py).
         """
@@ -69,9 +84,7 @@ class FaceEmbedder:
         features, so training epochs only run the cheap trainable head repeatedly.
         """
         tensor = preprocess_image(img, self.device)
-        with torch.no_grad():
-            fused, _ = extract_multiscale_features(self.backbone, tensor)
-        return fused.mean(dim=(2, 3)).squeeze(0)  # [768]
+        return self._global_embedding(tensor).squeeze(0)  # [768]
 
 
 def verify(embedder: FaceEmbedder, img_a: Image.Image, img_b: Image.Image, threshold: float = 0.5) -> tuple[bool, float]:
