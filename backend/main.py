@@ -15,6 +15,7 @@ you need multi-worker deployment.
 
 from __future__ import annotations
 
+import base64
 import io
 import sys
 import time
@@ -26,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -40,6 +42,7 @@ from geco.visualize import (  # noqa: E402
 )
 from geco.propagation import SeedAnnotation, propagate_keypoints  # noqa: E402
 from geco.anomaly import detect_anomalies  # noqa: E402
+from geco.face import FaceEmbedder, FaceProjectionHead, verify as face_verify, verify_detailed  # noqa: E402
 
 app = FastAPI(title="GECO-Enhanced API", version="0.1.0")
 
@@ -63,6 +66,38 @@ def _get_model():
         _device = get_device()
         _model = load_dinov2(device=_device)
     return _model
+
+
+_FACE_HEAD_ARCFACE_PATH = Path(__file__).resolve().parent.parent / "face_head_arcface.pt"
+_FACE_HEAD_TRIPLET_PATH = Path(__file__).resolve().parent.parent / "face_head.pt"
+_face_embedder: FaceEmbedder | None = None
+_face_threshold: float = 0.30
+_face_model_name: str = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
+
+
+def _get_face_embedder() -> tuple[FaceEmbedder, float, str]:
+    """Lazily loads the trained face projection head. Prioritizes the ArcFace head
+    (99.40% accuracy, threshold 0.30) if present, and falls back to the triplet
+    loss head (89.60% accuracy, threshold 0.55).
+    """
+    global _face_embedder, _face_threshold, _face_model_name
+    if _face_embedder is None:
+        head = FaceProjectionHead()
+        if _FACE_HEAD_ARCFACE_PATH.exists():
+            head.load_state_dict(torch.load(_FACE_HEAD_ARCFACE_PATH, map_location="cpu"))
+            _face_threshold = 0.30
+            _face_model_name = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
+        elif _FACE_HEAD_TRIPLET_PATH.exists():
+            head.load_state_dict(torch.load(_FACE_HEAD_TRIPLET_PATH, map_location="cpu"))
+            _face_threshold = 0.55
+            _face_model_name = "DINOv2 ViT-B/14 + Triplet Head (LFW only, 89.6% accuracy)"
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Face projection head weights not found (expected {_FACE_HEAD_ARCFACE_PATH} or {_FACE_HEAD_TRIPLET_PATH}).",
+            )
+        _face_embedder = FaceEmbedder(head=head)
+    return _face_embedder, _face_threshold, _face_model_name
 
 
 def _prune_sessions() -> None:
@@ -401,6 +436,183 @@ async def cross_model_match(
         centroid_x=centroid_x,
         centroid_y=centroid_y,
         trust=trust,
+    )
+
+
+def _image_to_base64_jpeg(img: Image.Image, quality: int = 90) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+class FaceVerifyResponse(BaseModel):
+    is_same_person: bool
+    similarity: float
+    threshold: float
+    margin: float
+    confidence: float
+    verdict_category: str
+    cosine_distance: float
+    euclidean_distance: float
+    aligned_photo_a: str | None = None
+    aligned_photo_b: str | None = None
+    model_info: str
+
+
+class FaceSampleItem(BaseModel):
+    id: str
+    title: str
+    category: str  # "same_person" | "different_people"
+    description: str
+    image_a_base64: str
+    image_b_base64: str
+
+
+class FaceModelInfoResponse(BaseModel):
+    model_name: str
+    backbone: str
+    projection_head: str
+    calibrated_threshold: float
+    benchmark_accuracy: str
+    dataset_summary: str
+
+
+@app.post("/api/verify-face", response_model=FaceVerifyResponse)
+async def verify_face(
+    photo_a: UploadFile = File(...),
+    photo_b: UploadFile = File(...),
+    threshold: float | None = Form(None),
+):
+    """Face verification -- evaluates identity similarity between two face photos using
+    a frozen DINOv2 backbone + an ArcFace/metric projection head.
+    Returns calibrated verdict, confidence, distance metrics, and aligned crops.
+    """
+    embedder, default_threshold, model_name = _get_face_embedder()
+    effective_threshold = threshold if threshold is not None else default_threshold
+
+    try:
+        img_a = Image.open(io.BytesIO(await photo_a.read())).convert("RGB")
+        img_b = Image.open(io.BytesIO(await photo_b.read())).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read uploaded images: {exc}")
+
+    detail = verify_detailed(embedder, img_a, img_b, threshold=effective_threshold)
+
+    aligned_a_b64 = _image_to_base64_jpeg(detail["aligned_a"])
+    aligned_b_b64 = _image_to_base64_jpeg(detail["aligned_b"])
+
+    return FaceVerifyResponse(
+        is_same_person=detail["is_same_person"],
+        similarity=detail["similarity"],
+        threshold=detail["threshold"],
+        margin=detail["margin"],
+        confidence=detail["confidence"],
+        verdict_category=detail["verdict_category"],
+        cosine_distance=detail["cosine_distance"],
+        euclidean_distance=detail["euclidean_distance"],
+        aligned_photo_a=aligned_a_b64,
+        aligned_photo_b=aligned_b_b64,
+        model_info=model_name,
+    )
+
+
+_cached_face_samples: list[FaceSampleItem] | None = None
+
+
+@app.get("/api/face-samples", response_model=list[FaceSampleItem])
+async def get_face_samples():
+    """Returns curated verification pairs from LFW and YTF benchmarks for quick demonstration."""
+    global _cached_face_samples
+    if _cached_face_samples is not None:
+        return _cached_face_samples
+
+    repo_root = Path(__file__).resolve().parent.parent
+    sample_defs = [
+        {
+            "id": "jackie_chan_same",
+            "title": "Jackie Chan",
+            "category": "same_person",
+            "description": "LFW benchmark: different poses, lighting, and camera angles.",
+            "path_a": repo_root / "datasets/faces/lfw/Jackie_Chan/6378.jpg",
+            "path_b": repo_root / "datasets/faces/lfw/Jackie_Chan/2653.jpg",
+        },
+        {
+            "id": "sandra_bullock_same",
+            "title": "Sandra Bullock",
+            "category": "same_person",
+            "description": "LFW benchmark: different facial expressions and focal lengths.",
+            "path_a": repo_root / "datasets/faces/lfw/Sandra_Bullock/4292.jpg",
+            "path_b": repo_root / "datasets/faces/lfw/Sandra_Bullock/5113.jpg",
+        },
+        {
+            "id": "aaron_eckhart_ytf_same",
+            "title": "Aaron Eckhart (Cross-Video)",
+            "category": "same_person",
+            "description": "YouTube Faces benchmark: extracted from two separate interview videos.",
+            "path_a": repo_root / "datasets/faces/ytf_frames/ytf_Aaron_Eckhart/Aaron_Eckhart_0_0.jpg",
+            "path_b": repo_root / "datasets/faces/ytf_frames/ytf_Aaron_Eckhart/Aaron_Eckhart_1_0.jpg",
+        },
+        {
+            "id": "stack_vs_bjorn_diff",
+            "title": "Robert Stack vs Thomas Bjorn",
+            "category": "different_people",
+            "description": "LFW benchmark: distinct identities, negative pair.",
+            "path_a": repo_root / "datasets/faces/lfw/Robert_Stack/1102.jpg",
+            "path_b": repo_root / "datasets/faces/lfw/Thomas_Bjorn/3033.jpg",
+        },
+        {
+            "id": "pfeiffer_vs_glynn_diff",
+            "title": "Michelle Pfeiffer vs Kathleen Glynn",
+            "category": "different_people",
+            "description": "LFW benchmark: distinct identities, negative pair.",
+            "path_a": repo_root / "datasets/faces/lfw/Michelle_Pfeiffer/4943.jpg",
+            "path_b": repo_root / "datasets/faces/lfw/Kathleen_Glynn/3838.jpg",
+        },
+    ]
+
+    items: list[FaceSampleItem] = []
+    for s in sample_defs:
+        if s["path_a"].exists() and s["path_b"].exists():
+            try:
+                im_a = Image.open(s["path_a"]).convert("RGB")
+                im_b = Image.open(s["path_b"]).convert("RGB")
+                items.append(
+                    FaceSampleItem(
+                        id=s["id"],
+                        title=s["title"],
+                        category=s["category"],
+                        description=s["description"],
+                        image_a_base64=_image_to_base64_jpeg(im_a),
+                        image_b_base64=_image_to_base64_jpeg(im_b),
+                    )
+                )
+            except Exception:
+                continue
+
+    _cached_face_samples = items
+    return items
+
+
+@app.get("/api/face-model-info", response_model=FaceModelInfoResponse)
+async def get_face_model_info():
+    """Returns metadata, architecture specs, and benchmark metrics for the active face model."""
+    _, threshold, model_name = _get_face_embedder()
+    is_arcface = "ArcFace" in model_name
+    return FaceModelInfoResponse(
+        model_name=model_name,
+        backbone="Meta DINOv2 ViT-B/14 (Frozen, 86M parameters, patch size 14)",
+        projection_head="768 -> 256 (ReLU) -> 128 (L2 unit sphere normalization)",
+        calibrated_threshold=threshold,
+        benchmark_accuracy=(
+            "99.40% on 500-pair held-out benchmark (TP: 249/250, TN: 248/250)"
+            if is_arcface
+            else "89.60% on 500-pair held-out benchmark"
+        ),
+        dataset_summary=(
+            "Trained on combined LFW + YouTube Faces (YTF) corpus: 2,163 identities, 17,385 frames"
+            if is_arcface
+            else "Trained on LFW corpus (triplet loss)"
+        ),
     )
 
 

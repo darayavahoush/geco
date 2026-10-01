@@ -77,6 +77,39 @@ export async function runAnomaly({ testFile, referenceFile }) {
   return res.json();
 }
 
+// ── Face Verification — frozen DINOv2 + trained projection head, identity task ──
+export async function runVerifyFace({ photoAFile, photoBFile, threshold = null }) {
+  const form = new FormData();
+  form.append("photo_a", photoAFile);
+  form.append("photo_b", photoBFile);
+  if (threshold !== null && threshold !== undefined) {
+    form.append("threshold", threshold);
+  }
+
+  const res = await fetch(`${API_URL}/api/verify-face`, { method: "POST", body: form });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Face verification failed (${res.status}): ${detail}`);
+  }
+  return res.json();
+}
+
+export async function fetchFaceSamples() {
+  const res = await fetch(`${API_URL}/api/face-samples`);
+  if (!res.ok) {
+    throw new Error(`Failed to load face samples (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchFaceModelInfo() {
+  const res = await fetch(`${API_URL}/api/face-model-info`);
+  if (!res.ok) {
+    throw new Error(`Failed to load face model info (${res.status})`);
+  }
+  return res.json();
+}
+
 // ── Cross-Model Trust — DINOv2/DINOv1(/CLIP) agreement as a free uncertainty signal ──
 export async function runCrossModelMatch({ srcFile, trgFile, pixelX, pixelY, models = "dinov2,dino1" }) {
   const form = new FormData();

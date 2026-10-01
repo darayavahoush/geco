@@ -50,12 +50,16 @@ geco/
 │   ├── confidence.py    # Patch confidence estimation + adaptive dustbin
 │   ├── matching.py      # Confidence-aware marginals + Sinkhorn OT matching
 │   ├── keypoints.py      # Pixel-level keypoint transfer
-│   └── visualize.py      # PCA/heatmap rendering to base64 PNGs
+│   ├── visualize.py      # PCA/heatmap rendering to base64 PNGs
+│   ├── face.py           # DINOv2 CLS-token face embedder + ArcFace projection head
+│   └── face_align.py     # Canonical 2-point landmark face alignment
 ├── backend/            # FastAPI service wrapping the package for the frontend
 │   └── main.py
 ├── frontend/           # React (Vite) UI
 │   └── src/
 ├── scripts/
+│   ├── train/          # ArcFace / metric learning training scripts
+│   ├── eval/           # 500-pair held-out benchmark and threshold sweep
 │   └── download_datasets.sh   # optional: PF-PASCAL / SPair-71k / CUB-200 for eval
 ├── docker-compose.yml
 └── pyproject.toml

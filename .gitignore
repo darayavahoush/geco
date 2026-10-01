@@ -17,6 +17,10 @@ frontend/.env
 datasets/
 .cache/
 
+# Generated / temp
+aligned_test.jpg
+training_log.txt
+
 # OS / editor
 .DS_Store
 .idea/

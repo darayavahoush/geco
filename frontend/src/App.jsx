@@ -5,6 +5,7 @@ import PropagateTab from "./tabs/PropagateTab.jsx";
 import AnomalyTab from "./tabs/AnomalyTab.jsx";
 import TrustTab from "./tabs/TrustTab.jsx";
 import ResearchTab from "./tabs/ResearchTab.jsx";
+import FaceTab from "./tabs/FaceTab.jsx";
 import { checkHealth } from "./api";
 import "./App.css";
 
@@ -14,6 +15,7 @@ const TABS = [
   { id: "propagate", label: "Component 2A — Propagate", component: PropagateTab },
   { id: "anomaly", label: "Component 2B — Anomaly", component: AnomalyTab },
   { id: "trust", label: "Cross-Model Trust", component: TrustTab },
+  { id: "face", label: "Face Verification", component: FaceTab },
   { id: "research", label: "Research", component: ResearchTab },
 ];
 

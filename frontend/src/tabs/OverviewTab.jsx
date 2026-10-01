@@ -19,6 +19,11 @@ const CARDS = [
     title: "Cross-Model Trust",
     desc: "Zero-training uncertainty from disagreement between independently-trained backbones — DINOv2, DINOv1, DINOv3.",
   },
+  {
+    id: "face",
+    title: "Face Verification",
+    desc: "Identity verification powered by frozen DINOv2 ViT-B/14 + ArcFace margin projection head (99.40% benchmark accuracy).",
+  },
 ];
 
 export default function OverviewTab({ onNavigate }) {
