@@ -447,9 +447,17 @@ export default function FaceMesh3DViewer({
       ny /= nLen;
       nz /= nLen;
 
+      // Rotate surface normal with yaw and pitch
+      const rnx = nx * cosY + nz * sinY;
+      const rny = ny * cosP - (-nx * sinY + nz * cosY) * sinP;
+      const rnz = ny * sinP + (-nx * sinY + nz * cosY) * cosP;
+
       // Backface culling: skip polygons facing away from camera
       const isFacing = rnz >= -0.22;
       if (!isFacing) return;
+
+      const dot = Math.max(0, rnx * lnx + rny * lny + rnz * lnz);
+      const intensity = 0.35 + 0.65 * dot;
 
       const uv0 = CANONICAL_UVS[item.tri[0]] || { u: 0.5, v: 0.5 };
       const uv1 = CANONICAL_UVS[item.tri[1]] || { u: 0.5, v: 0.5 };
