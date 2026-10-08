@@ -263,12 +263,37 @@ export default function FaceTab() {
   function captureWebcamPhoto() {
     if (!videoRef.current) return;
     const video = videoRef.current;
+    const vw = video.videoWidth || 640;
+    const vh = video.videoHeight || 480;
+
+    // Crop a square region framing the face oval from the center of the video
+    // This removes ceiling, shoulders, and room background clutter immediately
+    const cropSize = Math.round(Math.min(vw, vh) * 0.78);
+    const cropX = Math.round((vw - cropSize) / 2);
+    const cropY = Math.round(Math.max(0, (vh - cropSize) * 0.38));
+
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = 448;
+    canvas.height = 448;
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+
+    // Mirror horizontally so the captured photo matches the webcam preview mirror
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+
+    ctx.drawImage(
+      video,
+      cropX,
+      cropY,
+      cropSize,
+      cropSize,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
 
     const targetAngle = isGuidedScanning
       ? ANGLE_PRESETS[guidedScanIndex].id

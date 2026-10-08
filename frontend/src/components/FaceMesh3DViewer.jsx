@@ -81,71 +81,19 @@ const CONTOUR_INDICES = [0, 1, 6, 35, 53, 55, 51, 50, 52, 56, 54, 38, 7, 2, 0];
 // Detect face sub-region in source photo (isolating face from shoulders and background)
 function getFaceCropRect(img) {
   if (!img || !img.width || !img.height) return null;
-  // If image is already a square aligned crop (e.g. 224x224), use full image
-  if (Math.abs(img.width - img.height) < 4 && img.width <= 300) {
+  // If image is already a square aligned crop (e.g. 224x224 or 400x400), use full image
+  const aspect = img.width / img.height;
+  if (aspect >= 0.92 && aspect <= 1.08) {
     return { sx: 0, sy: 0, sw: img.width, sh: img.height };
   }
 
-  try {
-    const sw = 100;
-    const sh = Math.max(10, Math.round(100 * (img.height / img.width)));
-    const c = document.createElement("canvas");
-    c.width = sw;
-    c.height = sh;
-    const cx = c.getContext("2d", { willReadFrequently: true });
-    cx.drawImage(img, 0, 0, sw, sh);
-    const d = cx.getImageData(0, 0, sw, sh).data;
-
-    let sumX = 0, sumY = 0, count = 0;
-    let minX = sw, maxX = 0, minY = sh, maxY = 0;
-
-    for (let y = 0; y < sh; y++) {
-      for (let x = 0; x < sw; x++) {
-        const i = (y * sw + x) * 4;
-        const r = d[i], g = d[i + 1], b = d[i + 2];
-        const yVal = 0.299 * r + 0.587 * g + 0.114 * b;
-        const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
-        const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
-
-        if (yVal > 30 && cb >= 75 && cb <= 130 && cr >= 130 && cr <= 178) {
-          sumX += x;
-          sumY += y;
-          count++;
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-
-    if (count > sw * sh * 0.03) {
-      const centerX = (sumX / count) / sw;
-      const centerY = (sumY / count) / sh;
-      const boxW = Math.max(0.20, ((maxX - minX) / sw) * 1.35);
-      const boxH = Math.max(0.24, ((maxY - minY) / sh) * 1.35);
-      const side = Math.max(boxW, boxH);
-
-      const pxX = Math.max(0, (centerX - side * 0.5) * img.width);
-      const pxY = Math.max(0, (centerY - side * 0.5) * img.height);
-      const pxSide = Math.min(side * img.width, Math.min(img.width - pxX, img.height - pxY));
-
-      return {
-        sx: pxX,
-        sy: pxY,
-        sw: pxSide,
-        sh: pxSide,
-      };
-    }
-  } catch (e) {
-    // Canvas context fallback
-  }
-
-  // Golden portrait center framing fallback
-  const side = Math.min(img.width, img.height) * 0.65;
+  // Portrait framing: center horizontally, upper third vertically
+  const side = Math.round(Math.min(img.width, img.height) * 0.82);
+  const sx = Math.round((img.width - side) / 2);
+  const sy = Math.round(Math.max(0, (img.height - side) * 0.35));
   return {
-    sx: Math.max(0, (img.width - side) / 2),
-    sy: Math.max(0, (img.height - side) * 0.35),
+    sx,
+    sy,
     sw: side,
     sh: side,
   };
@@ -452,12 +400,9 @@ export default function FaceMesh3DViewer({
       const rny = ny * cosP - (-nx * sinY + nz * cosY) * sinP;
       const rnz = ny * sinP + (-nx * sinY + nz * cosY) * cosP;
 
-      // Backface culling: skip polygons facing away from camera
-      const isFacing = rnz >= -0.22;
-      if (!isFacing) return;
-
-      const dot = Math.max(0, rnx * lnx + rny * lny + rnz * lnz);
-      const intensity = 0.35 + 0.65 * dot;
+      // Continuous facial surface shading (two-sided lighting for consistent facet illumination)
+      const dot = Math.abs(rnx * lnx + rny * lny + rnz * lnz);
+      const intensity = 0.45 + 0.55 * dot;
 
       const uv0 = CANONICAL_UVS[item.tri[0]] || { u: 0.5, v: 0.5 };
       const uv1 = CANONICAL_UVS[item.tri[1]] || { u: 0.5, v: 0.5 };
