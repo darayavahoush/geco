@@ -151,6 +151,65 @@ function getFaceCropRect(img) {
   };
 }
 
+// Canonical UV coordinates for photo texture projection onto 3D face mesh
+const CANONICAL_UVS = CANONICAL_LANDMARKS.map(([x, y]) => ({
+  u: Math.max(0.01, Math.min(0.99, 0.50 + x * 0.52)),
+  v: Math.max(0.01, Math.min(0.99, 0.50 - y * 0.50)),
+}));
+
+// Affine triangle texture mapping onto canvas 2D path
+function drawTexturedTriangle(ctx, img, p0, p1, p2, uv0, uv1, uv2, intensity, crop) {
+  const x0 = p0.x, y0 = p0.y;
+  const x1 = p1.x, y1 = p1.y;
+  const x2 = p2.x, y2 = p2.y;
+
+  const sx = crop ? crop.sx : 0;
+  const sy = crop ? crop.sy : 0;
+  const sw = crop ? crop.sw : img.width;
+  const sh = crop ? crop.sh : img.height;
+
+  const u0 = sx + uv0.u * sw;
+  const v0 = sy + uv0.v * sh;
+  const u1 = sx + uv1.u * sw;
+  const v1 = sy + uv1.v * sh;
+  const u2 = sx + uv2.u * sw;
+  const v2 = sy + uv2.v * sh;
+
+  const denom = u0 * (v1 - v2) + u1 * (v2 - v0) + u2 * (v0 - v1);
+  if (Math.abs(denom) < 1e-4) return;
+
+  const a = (x0 * (v1 - v2) + x1 * (v2 - v0) + x2 * (v0 - v1)) / denom;
+  const b = (y0 * (v1 - v2) + y1 * (v2 - v0) + y2 * (v0 - v1)) / denom;
+  const c = (x0 * (u2 - u1) + x1 * (u0 - u2) + x2 * (u1 - u0)) / denom;
+  const d = (y0 * (u2 - u1) + y1 * (u0 - u2) + y2 * (u1 - u0)) / denom;
+  const e = (x0 * (u1 * v2 - u2 * v1) + x1 * (u2 * v0 - u0 * v2) + x2 * (u0 * v1 - u1 * v0)) / denom;
+  const f = (y0 * (u1 * v2 - u2 * v1) + y1 * (u2 * v0 - u0 * v2) + y2 * (u0 * v1 - u1 * v0)) / denom;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.closePath();
+  ctx.clip();
+
+  ctx.transform(a, b, c, d, e, f);
+  ctx.drawImage(img, 0, 0);
+
+  // Apply 3D directional lighting/depth shadow
+  if (intensity !== undefined && intensity < 0.98) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(0, 0, 0, ${Math.max(0, 1.0 - intensity) * 0.45})`;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 export default function FaceMesh3DViewer({
   modelData,
   photoUrl = null,
@@ -351,71 +410,7 @@ export default function FaceMesh3DViewer({
       activeTexture = loadedImages.right;
     }
 
-    // ── 1. RENDER PHOTO-TEXTURED 3D FACE SURFACE ──
-    if (activeTexture && (renderMode === "photo" || renderMode === "wireframe" || renderMode === "confidence" || renderMode === "comparison")) {
-      ctx.save();
-
-      // Create 3D facial clipping path along the perimeter contour
-      ctx.beginPath();
-      CONTOUR_INDICES.forEach((idx, i) => {
-        const pt = transformed[idx];
-        if (!pt) return;
-        if (i === 0) ctx.moveTo(pt.x, pt.y);
-        else ctx.lineTo(pt.x, pt.y);
-      });
-      ctx.closePath();
-      ctx.clip();
-
-      // Calculate perspective image placement
-      // Center on nose bridge landmark [26] or [8]
-      const anchorPt = transformed[26] || transformed[8] || { x: w / 2, y: h / 2 };
-      const chinPt = transformed[50] || { x: w / 2, y: h * 0.85 };
-      const foreheadPt = transformed[0] || { x: w / 2, y: h * 0.2 };
-      const faceHeight = Math.hypot(chinPt.x - foreheadPt.x, chinPt.y - foreheadPt.y) || h * 0.7;
-
-      const crop = getFaceCropRect(activeTexture);
-      const sx = crop ? crop.sx : 0;
-      const sy = crop ? crop.sy : 0;
-      const sw = crop ? crop.sw : activeTexture.width;
-      const sh = crop ? crop.sh : activeTexture.height;
-
-      const drawH = faceHeight * 1.30;
-      const drawW = drawH * (sw / sh);
-
-      // Parallax shift based on yaw & pitch
-      const shiftX = Math.sin(yaw) * (w * 0.12);
-      const shiftY = -Math.sin(pitch) * (h * 0.10);
-
-      ctx.drawImage(
-        activeTexture,
-        sx,
-        sy,
-        sw,
-        sh,
-        anchorPt.x - drawW / 2 + shiftX,
-        anchorPt.y - drawH * 0.44 + shiftY,
-        drawW,
-        drawH
-      );
-
-      // Apply 3D anatomical shading & depth illumination over the photo
-      const lightGrad = ctx.createLinearGradient(
-        w / 2 - Math.sin(yaw) * 120,
-        h / 2 - Math.sin(pitch) * 120,
-        w / 2 + Math.sin(yaw) * 120,
-        h / 2 + Math.sin(pitch) * 120
-      );
-      // Dynamic rim lighting & depth falloff
-      const depthShadow = Math.abs(Math.sin(yaw)) * 0.35;
-      lightGrad.addColorStop(0, `rgba(255, 255, 255, ${0.15 - depthShadow * 0.1})`);
-      lightGrad.addColorStop(0.5, "rgba(0, 0, 0, 0)");
-      lightGrad.addColorStop(1, `rgba(0, 0, 0, ${0.35 + depthShadow})`);
-
-      ctx.fillStyle = lightGrad;
-      ctx.fillRect(0, 0, w, h);
-
-      ctx.restore();
-    }
+    const crop = activeTexture ? getFaceCropRect(activeTexture) : null;
 
     // ── 2. SORT TRIANGLES BY DEPTH (Painter's Algorithm) ──
     const sortedTris = triangles
@@ -452,74 +447,108 @@ export default function FaceMesh3DViewer({
       ny /= nLen;
       nz /= nLen;
 
-      // Rotate normal
-      const rnx = nx * cosY + nz * sinY;
-      const rny = ny * cosP - (-nx * sinY + nz * cosY) * sinP;
-      const rnz = ny * sinP + (-nx * sinY + nz * cosY) * cosP;
+      // Backface culling: skip polygons facing away from camera
+      const isFacing = rnz >= -0.22;
+      if (!isFacing) return;
 
-      const dot = Math.max(0, rnx * lnx + rny * lny + rnz * lnz);
-      const intensity = 0.3 + 0.7 * dot;
-
-      ctx.beginPath();
-      ctx.moveTo(v0.x, v0.y);
-      ctx.lineTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.closePath();
+      const uv0 = CANONICAL_UVS[item.tri[0]] || { u: 0.5, v: 0.5 };
+      const uv1 = CANONICAL_UVS[item.tri[1]] || { u: 0.5, v: 0.5 };
+      const uv2 = CANONICAL_UVS[item.tri[2]] || { u: 0.5, v: 0.5 };
 
       if (renderMode === "photo") {
-        // Subtle 3D depth facet relief over the photo
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
-        ctx.lineWidth = 0.6;
-        ctx.stroke();
+        if (activeTexture) {
+          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity, crop);
+          // Subtle polygonal depth relief
+          ctx.beginPath();
+          ctx.moveTo(v0.x, v0.y);
+          ctx.lineTo(v1.x, v1.y);
+          ctx.lineTo(v2.x, v2.y);
+          ctx.closePath();
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        } else {
+          // Shaded fallback if no photo loaded
+          const r = Math.floor(215 * intensity);
+          const g = Math.floor(168 * intensity);
+          const b = Math.floor(142 * intensity);
+          ctx.beginPath();
+          ctx.moveTo(v0.x, v0.y);
+          ctx.lineTo(v1.x, v1.y);
+          ctx.lineTo(v2.x, v2.y);
+          ctx.closePath();
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.92)`;
+          ctx.fill();
+        }
       } else if (renderMode === "shaded") {
-        // Natural realistic skin tone shading (NOT a masquerade mask!)
-        // Warm natural human facial tone with diffuse lighting
-        const r = Math.floor(215 * intensity);
-        const g = Math.floor(168 * intensity);
-        const b = Math.floor(142 * intensity);
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.92)`;
+        const r = Math.floor(218 * intensity);
+        const g = Math.floor(172 * intensity);
+        const b = Math.floor(145 * intensity);
+        ctx.beginPath();
+        ctx.moveTo(v0.x, v0.y);
+        ctx.lineTo(v1.x, v1.y);
+        ctx.lineTo(v2.x, v2.y);
+        ctx.closePath();
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.95)`;
         ctx.fill();
-
-        ctx.strokeStyle = "rgba(120, 85, 70, 0.18)";
+        ctx.strokeStyle = "rgba(120, 85, 70, 0.20)";
         ctx.lineWidth = 0.7;
         ctx.stroke();
       } else if (renderMode === "wireframe") {
-        // High-tech holographic wireframe lattice over the face
+        if (activeTexture) {
+          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.40, crop);
+        }
+        ctx.beginPath();
+        ctx.moveTo(v0.x, v0.y);
+        ctx.lineTo(v1.x, v1.y);
+        ctx.lineTo(v2.x, v2.y);
+        ctx.closePath();
         ctx.fillStyle = "rgba(14, 24, 40, 0.35)";
         ctx.fill();
-
-        ctx.strokeStyle = "rgba(100, 190, 255, 0.65)";
+        ctx.strokeStyle = "rgba(100, 190, 255, 0.75)";
         ctx.lineWidth = 1.0;
         ctx.stroke();
       } else if (renderMode === "confidence") {
-        // INCONSISTENCY & UNCERTAINTY HEATMAP
-        // Green: confirmed, Amber: partial, Red: blind spot / inconsistent
+        if (activeTexture) {
+          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.75, crop);
+        }
+        ctx.beginPath();
+        ctx.moveTo(v0.x, v0.y);
+        ctx.lineTo(v1.x, v1.y);
+        ctx.lineTo(v2.x, v2.y);
+        ctx.closePath();
         if (avgConf >= 0.85) {
-          ctx.fillStyle = `rgba(34, 197, 94, ${0.28 + 0.35 * intensity})`;
+          ctx.fillStyle = `rgba(34, 197, 94, 0.42)`;
           ctx.strokeStyle = "rgba(34, 197, 94, 0.85)";
           ctx.lineWidth = 0.8;
         } else if (avgConf >= 0.50) {
-          ctx.fillStyle = `rgba(245, 158, 11, ${0.35 + 0.35 * intensity})`;
+          ctx.fillStyle = `rgba(245, 158, 11, 0.52)`;
           ctx.strokeStyle = "rgba(245, 158, 11, 0.95)";
           ctx.lineWidth = 1.2;
         } else {
-          // Unconstrained blind spot
-          ctx.fillStyle = `rgba(239, 68, 68, ${0.45 + 0.4 * intensity})`;
+          ctx.fillStyle = `rgba(239, 68, 68, 0.62)`;
           ctx.strokeStyle = "rgba(220, 38, 38, 1.0)";
           ctx.lineWidth = 1.8;
         }
         ctx.fill();
         ctx.stroke();
       } else if (renderMode === "comparison") {
-        // 3D GEOMETRIC DEVIATION HEATMAP
+        if (activeTexture) {
+          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.75, crop);
+        }
+        ctx.beginPath();
+        ctx.moveTo(v0.x, v0.y);
+        ctx.lineTo(v1.x, v1.y);
+        ctx.lineTo(v2.x, v2.y);
+        ctx.closePath();
         if (avgDev < 0.035) {
-          ctx.fillStyle = `rgba(34, 197, 94, ${0.3 + 0.35 * intensity})`;
+          ctx.fillStyle = `rgba(34, 197, 94, 0.42)`;
           ctx.strokeStyle = "rgba(34, 197, 94, 0.85)";
         } else if (avgDev < 0.075) {
-          ctx.fillStyle = `rgba(234, 179, 8, ${0.38 + 0.35 * intensity})`;
-          ctx.strokeStyle = "rgba(234, 179, 8, 0.9)";
+          ctx.fillStyle = `rgba(234, 179, 8, 0.50)`;
+          ctx.strokeStyle = "rgba(234, 179, 8, 0.90)";
         } else {
-          ctx.fillStyle = `rgba(239, 68, 68, ${0.5 + 0.4 * intensity})`;
+          ctx.fillStyle = `rgba(239, 68, 68, 0.62)`;
           ctx.strokeStyle = "rgba(239, 68, 68, 1.0)";
         }
         ctx.fill();

@@ -306,13 +306,93 @@ def reconstruct_3d_face_model(
     angle_weights = {"front": 35, "left": 20, "right": 20, "up": 15, "down": 10}
     completeness = sum(angle_weights.get(a, 0) for a in covered)
 
-    # Calculate per-vertex 3D coordinates and confidence scores
+    # Detect individual facial geometry & landmarks
+    face_meta = None
+    if images and len(images) > 0:
+        try:
+            from .face_align import extract_face_bbox_and_crop
+            front_idx = 0
+            if angles:
+                for idx, a in enumerate(angles):
+                    if a.lower() == "front":
+                        front_idx = idx
+                        break
+            _, face_meta = extract_face_bbox_and_crop(images[front_idx])
+        except Exception:
+            face_meta = None
+
+    scale_eye_w = 1.0
+    shift_eye_y = 0.0
+    shift_nose_y = 0.0
+    scale_nose_z = 1.0
+    shift_mouth_y = 0.0
+    scale_mouth_w = 1.0
+    scale_jaw_w = 1.0
+    scale_face_h = 1.0
+    iod_px = 60.0
+    bw = 150.0
+    bh = 180.0
+    nt_pt = (75.0, 95.0)
+    le_pt = (50.0, 70.0)
+    re_pt = (100.0, 70.0)
+
+    if face_meta and "landmarks" in face_meta and "bbox" in face_meta:
+        lm = face_meta["landmarks"]
+        bx, by, bw, bh = face_meta["bbox"]
+        cx = bx + bw / 2.0
+        cy = by + bh / 2.0
+
+        le_pt = lm.get("left_eye", (bx + bw * 0.34, by + bh * 0.38))
+        re_pt = lm.get("right_eye", (bx + bw * 0.66, by + bh * 0.38))
+        nt_pt = lm.get("nose_tip", (bx + bw * 0.50, by + bh * 0.55))
+        lm_mouth = lm.get("left_mouth", (bx + bw * 0.36, by + bh * 0.72))
+        rm_mouth = lm.get("right_mouth", (bx + bw * 0.64, by + bh * 0.72))
+
+        iod_px = abs(re_pt[0] - le_pt[0])
+        iod_ratio = iod_px / max(1.0, bw)
+        scale_eye_w = max(0.80, min(1.30, iod_ratio / 0.42))
+
+        eye_y_norm = ((le_pt[1] + re_pt[1]) / 2.0 - cy) / max(1.0, bh)
+        shift_eye_y = (-eye_y_norm - 0.20) * 0.35
+
+        nose_y_norm = (nt_pt[1] - cy) / max(1.0, bh)
+        shift_nose_y = (-nose_y_norm - (-0.10)) * 0.45
+
+        mouth_y_norm = ((lm_mouth[1] + rm_mouth[1]) / 2.0 - cy) / max(1.0, bh)
+        shift_mouth_y = (-mouth_y_norm - (-0.35)) * 0.40
+
+        mouth_w_px = abs(rm_mouth[0] - lm_mouth[0])
+        scale_mouth_w = max(0.80, min(1.30, (mouth_w_px / max(1.0, bw)) / 0.38))
+
+        aspect_ratio = bw / max(1.0, bh)
+        scale_jaw_w = max(0.80, min(1.25, aspect_ratio / 0.85))
+        scale_face_h = max(0.85, min(1.20, 0.85 / max(0.5, aspect_ratio)))
+
+    # Calculate per-vertex 3D coordinates adapted to the individual
     vertices_out = []
     confidence_per_vertex = []
 
     for name, x, y, z, region in CANONICAL_3D_LANDMARKS:
-        # Base coordinates
         vx, vy, vz = x, y, z
+
+        # Morph canonical coordinates to match detected individual face features
+        if region in ("left", "right") and "eye" in name:
+            vx *= scale_eye_w
+            vy += shift_eye_y
+        elif "brow" in name:
+            vx *= scale_eye_w
+            vy += shift_eye_y
+        elif "nose" in name or "nasal" in name or "rhinion" in name or "nasion" in name or "pronasale" in name or "subnasale" in name:
+            vy += shift_nose_y
+            vz *= scale_nose_z
+        elif "lip" in name or "mouth" in name or "stomion" in name or "cupid" in name or "philtrum" in name:
+            vx *= scale_mouth_w
+            vy += shift_mouth_y
+        elif "chin" in name or "mandible" in name or "gnathion" in name or "pogonion" in name:
+            vx *= scale_jaw_w
+            vy *= scale_face_h
+        elif "zygomatic" in name or "cheek" in name:
+            vx *= scale_jaw_w
 
         # Calculate vertex confidence based on multi-view presence
         if region == "center":
@@ -323,7 +403,6 @@ def reconstruct_3d_face_model(
             if "left" in covered:
                 conf = 0.95
             elif "front" in covered:
-                # Interpolated from frontal symmetry -- flagged as uncertain
                 conf = 0.32
                 vz *= 0.85  # lateral depth flattened due to lack of oblique constraint
             else:
@@ -332,7 +411,6 @@ def reconstruct_3d_face_model(
             if "right" in covered:
                 conf = 0.95
             elif "front" in covered:
-                # Interpolated from frontal symmetry -- flagged as uncertain
                 conf = 0.32
                 vz *= 0.85
             else:
@@ -405,10 +483,10 @@ def reconstruct_3d_face_model(
             "suggested_angles": [],
         }
 
-    # Anthropometric biometric measurements
-    inter_pupil_dist = float(((0.30 - (-0.30))**2 + 0)**0.5 * 105.0)  # normalized mm scale
-    nose_protrusion = float((0.48 - 0.26) * 110.0)
-    jaw_breadth = float(((0.54 - (-0.54))**2 + (-0.42 - (-0.42))**2)**0.5 * 125.0)
+    # Anthropometric biometric measurements computed from the individual face
+    inter_pupil_dist = float(iod_px / max(1.0, bw) * 135.0) if face_meta else float(((0.30 - (-0.30))**2 + 0)**0.5 * 105.0)
+    nose_protrusion = float(abs(nt_pt[1] - (le_pt[1] + re_pt[1]) / 2.0) / max(1.0, bh) * 72.0) if face_meta else 24.2
+    jaw_breadth = float(scale_jaw_w * 125.0)
 
     return {
         "vertices": vertices_out,
@@ -419,6 +497,7 @@ def reconstruct_3d_face_model(
         "missing_angles": missing,
         "inconsistencies": inconsistencies,
         "more_info_prompt": more_info_prompt,
+        "face_metadata": face_meta,
         "anthropometrics": {
             "inter_pupillary_distance_mm": round(inter_pupil_dist, 1),
             "nose_protrusion_mm": round(nose_protrusion, 1),

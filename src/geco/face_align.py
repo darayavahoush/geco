@@ -62,7 +62,7 @@ def _get_yunet_detector(width: int = 320, height: int = 320):
     return _YUNET_DETECTOR
 
 
-def _detect_yunet(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, int], tuple[float, float], tuple[float, float], float] | None:
+def _detect_yunet(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, int], tuple[float, float], tuple[float, float], dict, float] | None:
     h, w = rgb_array.shape[:2]
     detector = _get_yunet_detector(w, h)
     if detector is None:
@@ -78,16 +78,29 @@ def _detect_yunet(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, int], tup
             # where right eye is subject's right (image left side)
             re_x, re_y = float(best_face[4]), float(best_face[5])
             le_x, le_y = float(best_face[6]), float(best_face[7])
-            # Order as (left_eye_in_img, right_eye_in_img)
+            nose_x, nose_y = float(best_face[8]), float(best_face[9])
+            rm_x, rm_y = float(best_face[10]), float(best_face[11])
+            lm_x, lm_y = float(best_face[12]), float(best_face[13])
+
             left_pt = (min(re_x, le_x), re_y if re_x < le_x else le_y)
             right_pt = (max(re_x, le_x), le_y if re_x < le_x else re_y)
-            return (bx, by, bw, bh), left_pt, right_pt, score
+            left_mouth = (min(rm_x, lm_x), rm_y if rm_x < lm_x else lm_y)
+            right_mouth = (max(rm_x, lm_x), lm_y if rm_x < lm_x else rm_y)
+
+            landmarks = {
+                "left_eye": left_pt,
+                "right_eye": right_pt,
+                "nose_tip": (nose_x, nose_y),
+                "left_mouth": left_mouth,
+                "right_mouth": right_mouth,
+            }
+            return (bx, by, bw, bh), left_pt, right_pt, landmarks, score
     except Exception:
         pass
     return None
 
 
-def _detect_skin_gradient(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, int], tuple[float, float], tuple[float, float], float]:
+def _detect_skin_gradient(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, int], tuple[float, float], tuple[float, float], dict, float]:
     """Robust fallback skin-chromaticity + facial feature edge energy detector."""
     h, w = rgb_array.shape[:2]
     rgb_f = rgb_array.astype(np.float32)
@@ -138,7 +151,14 @@ def _detect_skin_gradient(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, i
         eye_y = by + bh_box * 0.38
         eye_left = (bx + bw_box * 0.34, eye_y)
         eye_right = (bx + bw_box * 0.66, eye_y)
-        return (bx, by, bw_box, bh_box), eye_left, eye_right, 0.82
+        landmarks = {
+            "left_eye": eye_left,
+            "right_eye": eye_right,
+            "nose_tip": (bx + bw_box * 0.50, by + bh_box * 0.55),
+            "left_mouth": (bx + bw_box * 0.36, by + bh_box * 0.72),
+            "right_mouth": (bx + bw_box * 0.64, by + bh_box * 0.72),
+        }
+        return (bx, by, bw_box, bh_box), eye_left, eye_right, landmarks, 0.82
 
     # Centered portrait framing
     side = int(min(w, h) * 0.70)
@@ -148,7 +168,16 @@ def _detect_skin_gradient(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, i
     bw_box = min(w - bx, side)
     bh_box = min(h - by, side)
     eye_y = by + bh_box * 0.38
-    return (bx, by, bw_box, bh_box), (bx + bw_box * 0.34, eye_y), (bx + bw_box * 0.66, eye_y), 0.50
+    eye_left = (bx + bw_box * 0.34, eye_y)
+    eye_right = (bx + bw_box * 0.66, eye_y)
+    landmarks = {
+        "left_eye": eye_left,
+        "right_eye": eye_right,
+        "nose_tip": (bx + bw_box * 0.50, by + bh_box * 0.55),
+        "left_mouth": (bx + bw_box * 0.36, by + bh_box * 0.72),
+        "right_mouth": (bx + bw_box * 0.64, by + bh_box * 0.72),
+    }
+    return (bx, by, bw_box, bh_box), eye_left, eye_right, landmarks, 0.50
 
 
 def align_from_points(rgb_array: np.ndarray, left_eye: tuple, right_eye: tuple) -> np.ndarray | None:
@@ -188,10 +217,10 @@ def extract_face_bbox_and_crop(img: Image.Image) -> tuple[Image.Image, dict]:
     # Try deep YuNet first
     yunet_res = _detect_yunet(rgb_orig)
     if yunet_res is not None:
-        (bx, by, bw, bh), left_eye, right_eye, conf = yunet_res
+        (bx, by, bw, bh), left_eye, right_eye, landmarks, conf = yunet_res
         method = "yunet_dnn"
     else:
-        (bx, by, bw, bh), left_eye, right_eye, conf = _detect_skin_gradient(rgb_orig)
+        (bx, by, bw, bh), left_eye, right_eye, landmarks, conf = _detect_skin_gradient(rgb_orig)
         method = "skin_gradient_analysis"
 
     # Clamp bbox within image bounds
@@ -222,6 +251,14 @@ def extract_face_bbox_and_crop(img: Image.Image) -> tuple[Image.Image, dict]:
             round(bw / max(1, w_orig), 4),
             round(bh / max(1, h_orig), 4),
         ],
+        "landmarks": {
+            k: [round(pt[0], 1), round(pt[1], 1)]
+            for k, pt in landmarks.items()
+        },
+        "normalized_landmarks": {
+            k: [round(pt[0] / max(1, w_orig), 4), round(pt[1] / max(1, h_orig), 4)]
+            for k, pt in landmarks.items()
+        },
         "confidence": round(conf * 100.0, 1),
         "method": method,
         "is_detected": True,
