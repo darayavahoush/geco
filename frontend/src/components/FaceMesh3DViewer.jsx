@@ -408,6 +408,26 @@ export default function FaceMesh3DViewer({
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [autoRotate, yaw, pitch, onRotate]);
 
+  // Resolve continuous 3D anatomical face mesh
+  const mesh = useMemo(() => {
+    if (modelData?.vertices && modelData.vertices.length >= 100 && modelData?.triangles) {
+      const uvs = (modelData.uvs && modelData.uvs.length === modelData.vertices.length)
+        ? modelData.uvs
+        : modelData.vertices.map(([x, y]) => ({
+            u: Math.max(0.01, Math.min(0.99, 0.50 + x * 0.58)),
+            v: Math.max(0.01, Math.min(0.99, 0.50 - y * 0.54)),
+          }));
+      return {
+        vertices: modelData.vertices,
+        triangles: modelData.triangles,
+        uvs,
+        confidences: modelData.confidence_per_vertex || [],
+      };
+    }
+    const covered = photos && photos.length > 0 ? photos.map((p) => p.angle) : ["front"];
+    return buildAnatomicalFaceMesh(modelData?.face_metadata, covered);
+  }, [modelData, photos]);
+
   // Main 3D Rendering Engine
   const render3D = useCallback(() => {
     const canvas = canvasRef.current;
@@ -439,30 +459,10 @@ export default function FaceMesh3DViewer({
       ctx.stroke();
     }
 
-  // Resolve continuous 3D anatomical face mesh
-  const mesh = useMemo(() => {
-    if (modelData?.vertices && modelData.vertices.length >= 100 && modelData?.triangles) {
-      const uvs = (modelData.uvs && modelData.uvs.length === modelData.vertices.length)
-        ? modelData.uvs
-        : modelData.vertices.map(([x, y]) => ({
-            u: Math.max(0.01, Math.min(0.99, 0.50 + x * 0.58)),
-            v: Math.max(0.01, Math.min(0.99, 0.50 - y * 0.54)),
-          }));
-      return {
-        vertices: modelData.vertices,
-        triangles: modelData.triangles,
-        uvs,
-        confidences: modelData.confidence_per_vertex || [],
-      };
-    }
-    const covered = photos && photos.length > 0 ? photos.map((p) => p.angle) : ["front"];
-    return buildAnatomicalFaceMesh(modelData?.face_metadata, covered);
-  }, [modelData, photos]);
-
-  const vertices = mesh.vertices;
-  const triangles = mesh.triangles;
-  const uvs = mesh.uvs;
-  const confidences = mesh.confidences;
+    const vertices = mesh.vertices;
+    const triangles = mesh.triangles;
+    const uvs = mesh.uvs;
+    const confidences = mesh.confidences;
 
   // Precalculate trigonometric transforms
   const cosY = Math.cos(yaw);
