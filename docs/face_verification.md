@@ -85,3 +85,24 @@ The web frontend includes:
 4. **Cosine Similarity Spectrum Meter**: Visual color-coded continuum highlighting the separation between match, ambiguous buffer, and mismatch zones.
 5. **Dual Inspection Mode**: Toggle between original uploaded images and normalized 224×224 aligned crops passed to the neural network.
 6. **Detailed Metric Vector Breakdown**: Cosine similarity, cosine distance, L2 Euclidean distance on unit sphere, and decision margin.
+
+---
+
+## 5. 3D Face Modeling, Inconsistency Detection & Active Inquiry
+
+To resolve depth ambiguities and eliminate 2D pose variance, the face module supports multi-view photo capture (Front, Left 35°, Right 35°, Tilt Up 20°, Tilt Down 20°):
+
+1. **Interactive Rotatable 3D Face Viewer**:
+   - Reconstructs a 57-landmark canonical 3D facial mesh with 93 polygonal facets.
+   - Full 360° rotation (yaw, pitch, roll) via mouse/touch drag, perspective depth projection, zoom ($0.5\times$ to $2.4\times$), auto-spin, and camera presets.
+   - Shading modes: Shaded Surface, Holographic Wireframe, Inconsistency Heatmap, and 3D Structural Deviation.
+2. **Inconsistency & Blind Spot Detection**:
+   - Detects unconstrained geometry (e.g. missing lateral profiles, ambiguous submental chin depth).
+   - Renders color-coded uncertainty heatmaps on the 3D mesh: emerald green ($\ge 90\%$ confidence), amber ($50-89\%$ interpolated), and pulsing crimson ($< 50\%$ unconstrained blind spots).
+3. **Active Inquiry for Missing Information**:
+   - Automatically diagnoses missing viewpoints and displays an action banner prompting the user to supply missing photos.
+   - Quick action buttons to snap or upload specific missing angles (e.g., "📷 Capture Left Profile (-35°)").
+4. **3D-Aware Biometric Comparison**:
+   - Fuses multi-view ArcFace deep embeddings ($85\%$) with 3D anthropometric structural concordance ($15\%$).
+   - Side-by-side synchronized 3D rotation, per-vertex geometric deviation heatmaps, and pairwise cross-angle similarity matrix.
+

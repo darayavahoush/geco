@@ -18,17 +18,20 @@ Core idea over vanilla GECO:
 See README.md for the full pipeline diagram and usage examples.
 """
 
-from .features import load_dinov2, preprocess_image, extract_multiscale_features
-from .confidence import (
-    compute_patch_confidence,
-    compute_patch_confidence_v2,
-    compute_adaptive_dustbin,
-)
-from .matching import get_confidence_aware_marginals, geco_match
-from .keypoints import transfer_keypoint
-from .geometry import fit_affine_ransac, AffineFitResult
-from .propagation import SeedAnnotation, PropagatedKeypoint, propagate_keypoints
-from .anomaly import AnomalyResult, detect_anomalies
+try:
+    from .features import load_dinov2, preprocess_image, extract_multiscale_features
+    from .confidence import (
+        compute_patch_confidence,
+        compute_patch_confidence_v2,
+        compute_adaptive_dustbin,
+    )
+    from .matching import get_confidence_aware_marginals, geco_match
+    from .keypoints import transfer_keypoint
+    from .geometry import fit_affine_ransac, AffineFitResult
+    from .propagation import SeedAnnotation, PropagatedKeypoint, propagate_keypoints
+    from .anomaly import AnomalyResult, detect_anomalies
+except (ImportError, Exception):
+    pass
 
 __all__ = [
     "load_dinov2",
