@@ -1,109 +1,247 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 
-// 52 anatomically grounded landmarks in normalized 3D coordinates [-1, 1]
-const CANONICAL_LANDMARKS = [
-  // Forehead & hairline (0-5)
-  [-0.0, 0.72, -0.05], [-0.36, 0.68, -0.16], [0.36, 0.68, -0.16],
-  [0.0, 0.52, 0.12], [-0.32, 0.50, 0.04], [0.32, 0.50, 0.04],
-  // Temples & Glabella (6-8)
-  [-0.60, 0.42, -0.22], [0.60, 0.42, -0.22], [0.0, 0.34, 0.24],
-  // Brows (9-14)
-  [-0.16, 0.34, 0.23], [-0.36, 0.36, 0.19], [-0.52, 0.32, 0.06],
-  [0.16, 0.34, 0.23], [0.36, 0.36, 0.19], [0.52, 0.32, 0.06],
-  // Eyes & Sockets (15-24)
-  [-0.15, 0.20, 0.15], [-0.30, 0.20, 0.13], [-0.46, 0.20, 0.07],
-  [-0.30, 0.25, 0.17], [-0.30, 0.15, 0.11], [0.15, 0.20, 0.15],
-  [0.30, 0.20, 0.13], [0.46, 0.20, 0.07], [0.30, 0.25, 0.17],
-  [0.30, 0.15, 0.11],
-  // Nose (25-33)
-  [0.0, 0.22, 0.26], [0.0, 0.08, 0.35], [0.0, -0.04, 0.43],
-  [0.0, -0.10, 0.48], [0.0, -0.20, 0.32], [-0.16, -0.11, 0.30],
-  [-0.12, -0.19, 0.26], [0.16, -0.11, 0.30], [0.12, -0.19, 0.26],
-  // Cheeks & Zygoma (34-39)
-  [-0.32, 0.05, 0.09], [-0.58, 0.04, -0.09], [-0.42, -0.15, 0.05],
-  [0.32, 0.05, 0.09], [0.58, 0.04, -0.09], [0.42, -0.15, 0.05],
-  // Lips & Mouth (40-47)
-  [0.0, -0.25, 0.30], [0.0, -0.30, 0.31], [-0.09, -0.29, 0.30],
-  [0.09, -0.29, 0.30], [0.0, -0.35, 0.27], [0.0, -0.41, 0.29],
-  [-0.24, -0.35, 0.19], [0.24, -0.35, 0.19],
-  // Chin & Jawline (48-56)
-  [0.0, -0.49, 0.24], [0.0, -0.59, 0.28], [0.0, -0.70, 0.18],
-  [-0.18, -0.63, 0.20], [0.18, -0.63, 0.20], [-0.54, -0.42, -0.18],
-  [0.54, -0.42, -0.18], [-0.38, -0.55, -0.02], [0.38, -0.55, -0.02]
-];
+/**
+ * Builds a continuous, high-density 3D anatomical human head/face mesh.
+ * Adapts to detected facial landmarks (pupil distance, nose protrusion, jaw width)
+ * and conforms to natural human facial curves (forehead slope, nose bridge/tip,
+ * eye socket dips, lips, and chin) without hard-edged mask boundaries or origami folds.
+ */
+export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front"]) {
+  const covered = new Set(coveredAngles || ["front"]);
 
-// Polygonal triangle facets
-const CANONICAL_TRIANGLES = [
-  // Forehead
-  [0, 1, 4], [0, 4, 3], [0, 3, 5], [0, 5, 2],
-  [1, 6, 4], [2, 5, 7],
-  // Brow & Glabella
-  [3, 4, 9], [3, 9, 8], [3, 8, 12], [3, 12, 5],
-  [4, 6, 11], [4, 11, 10], [4, 10, 9],
-  [5, 12, 13], [5, 13, 14], [5, 14, 7],
-  // Nose bridge
-  [8, 9, 25], [8, 25, 12],
-  [25, 15, 26], [25, 26, 20],
-  [26, 15, 34], [26, 37, 20],
-  // Eyes
-  [9, 10, 18], [9, 18, 15], [10, 11, 17], [10, 17, 18], [15, 18, 16], [18, 17, 16],
-  [15, 16, 19], [16, 17, 19], [17, 6, 35], [17, 35, 19],
-  [12, 23, 20], [12, 13, 23], [13, 24, 23], [13, 14, 22], [13, 22, 24],
-  [20, 21, 24], [21, 22, 24], [22, 7, 38], [22, 38, 24],
-  // Nose body & tip
-  [26, 34, 30], [26, 30, 27], [26, 27, 32], [26, 32, 37],
-  [27, 30, 28], [27, 28, 32],
-  [28, 30, 31], [28, 31, 29], [28, 29, 33], [28, 33, 32],
-  // Cheeks
-  [19, 35, 36], [19, 36, 34], [34, 36, 30],
-  [24, 39, 38], [24, 37, 39], [37, 32, 39],
-  // Mouth & Philtrum
-  [29, 31, 40], [29, 40, 33],
-  [40, 31, 42], [40, 42, 41], [40, 41, 43], [40, 43, 33],
-  [41, 42, 44], [41, 44, 43],
-  [42, 46, 44], [43, 44, 47],
-  [30, 36, 46], [30, 46, 31], [31, 46, 42],
-  [32, 33, 47], [32, 47, 39], [39, 47, 36],
-  // Lips & Chin
-  [44, 46, 45], [44, 45, 47],
-  [45, 46, 48], [45, 48, 47],
-  [48, 46, 51], [48, 51, 49], [48, 49, 52], [48, 52, 47],
-  [49, 51, 50], [49, 50, 52],
-  // Jawline & Mandible
-  [36, 53, 55], [36, 55, 46], [46, 55, 51], [51, 55, 50],
-  [39, 47, 56], [39, 56, 54], [47, 52, 56], [52, 50, 56],
-  [35, 53, 36], [38, 39, 54],
-];
+  let scaleEyeW = 1.0;
+  let shiftEyeY = 0.0;
+  let shiftNoseY = 0.0;
+  let scaleNoseZ = 1.0;
+  let shiftMouthY = 0.0;
+  let scaleMouthW = 1.0;
+  let scaleJawW = 1.0;
+  let scaleFaceH = 1.0;
 
-// Facial perimeter contour indices
-const CONTOUR_INDICES = [0, 1, 6, 35, 53, 55, 51, 50, 52, 56, 54, 38, 7, 2, 0];
+  if (faceMeta && faceMeta.landmarks && faceMeta.bbox) {
+    const lm = faceMeta.landmarks;
+    const [bx, by, bw, bh] = faceMeta.bbox;
+    const cx = bx + bw / 2.0;
+    const cy = by + bh / 2.0;
+
+    const le = lm.left_eye || [bx + bw * 0.34, by + bh * 0.38];
+    const re = lm.right_eye || [bx + bw * 0.66, by + bh * 0.38];
+    const nt = lm.nose_tip || [bx + bw * 0.50, by + bh * 0.55];
+    const lMouth = lm.left_mouth || [bx + bw * 0.36, by + bh * 0.72];
+    const rMouth = lm.right_mouth || [bx + bw * 0.64, by + bh * 0.72];
+
+    const iodPx = Math.abs(re[0] - le[0]);
+    scaleEyeW = Math.max(0.80, Math.min(1.30, (iodPx / Math.max(1.0, bw)) / 0.42));
+
+    const eyeYNorm = ((le[1] + re[1]) / 2.0 - cy) / Math.max(1.0, bh);
+    shiftEyeY = (-eyeYNorm - 0.20) * 0.35;
+
+    const noseYNorm = (nt[1] - cy) / Math.max(1.0, bh);
+    shiftNoseY = (-noseYNorm - (-0.10)) * 0.45;
+
+    const mouthYNorm = ((lMouth[1] + rMouth[1]) / 2.0 - cy) / Math.max(1.0, bh);
+    shiftMouthY = (-mouthYNorm - (-0.35)) * 0.40;
+
+    const mouthWPx = Math.abs(rMouth[0] - lMouth[0]);
+    scaleMouthW = Math.max(0.80, Math.min(1.30, (mouthWPx / Math.max(1.0, bw)) / 0.38));
+
+    const aspect = bw / Math.max(1.0, bh);
+    scaleJawW = Math.max(0.80, minVal(1.25, aspect / 0.85));
+    scaleFaceH = Math.max(0.85, minVal(1.20, 0.85 / Math.max(0.5, aspect)));
+  }
+
+  function minVal(a, b) {
+    return a < b ? a : b;
+  }
+
+  const GRID_X = 19;
+  const GRID_Y = 23;
+  const xs = [];
+  for (let i = 0; i < GRID_X; i++) {
+    xs.push(-0.72 + (1.44 * i) / (GRID_X - 1));
+  }
+  const ys = [];
+  for (let j = 0; j < GRID_Y; j++) {
+    ys.push(0.72 - (1.44 * j) / (GRID_Y - 1));
+  }
+
+  const vertices = [];
+  const uvs = [];
+  const confidences = [];
+  const gridMap = {};
+
+  for (let j = 0; j < GRID_Y; j++) {
+    const rawY = ys[j];
+    const y = rawY * scaleFaceH;
+
+    // Natural facial oval contour boundary:
+    // Upper forehead rounded, cheeks wide, jaw tapers smoothly
+    let w = 0.65;
+    if (y >= 0) {
+      w = 0.65 * Math.sqrt(Math.max(0.01, 1.0 - Math.pow((y - 0.08) / 0.72, 2)));
+    } else {
+      w = 0.65 * scaleJawW * (1.0 - 0.38 * Math.pow(-y / 0.74, 1.25));
+    }
+
+    for (let i = 0; i < GRID_X; i++) {
+      const x = xs[i];
+      if (Math.abs(x) <= w * 1.03) {
+        const normX = x / Math.max(0.08, w);
+
+        // Base cranial ellipsoidal curve
+        const zBase = 0.32 * (1.0 - 0.88 * normX * normX) - 0.12 * Math.pow(y / 0.74, 2);
+
+        // 3D Nose pyramid
+        let zNose = 0.0;
+        const noseYMin = -0.22 + shiftNoseY;
+        const noseYMax = 0.26 + shiftNoseY;
+        if (y >= noseYMin && y <= noseYMax) {
+          const lat = Math.exp(-0.5 * Math.pow(x / 0.12, 2));
+          const noseTipY = -0.08 + shiftNoseY;
+          let vert = 0.0;
+          if (y >= noseTipY) {
+            const prog = (noseYMax - y) / Math.max(0.01, noseYMax - noseTipY);
+            vert = 0.14 + 0.34 * prog;
+          } else {
+            const prog = (y - noseYMin) / Math.max(0.01, noseTipY - noseYMin);
+            vert = 0.10 + 0.38 * prog;
+          }
+          zNose = vert * lat * scaleNoseZ;
+        }
+
+        // Orbit dips (eye sockets)
+        let zOrbit = 0.0;
+        const eyeDistX = Math.abs(x) - 0.28 * scaleEyeW;
+        const eyeY = 0.18 + shiftEyeY;
+        const dEye = Math.sqrt(eyeDistX * eyeDistX + Math.pow((y - eyeY) / 0.85, 2));
+        if (dEye < 0.14) {
+          zOrbit = -0.08 * (1.0 - Math.pow(dEye / 0.14, 2));
+        }
+
+        // Supraorbital brow ridge
+        const browY = 0.31 + shiftEyeY;
+        const zBrow = 0.05 * Math.exp(-0.5 * Math.pow((Math.abs(x) - 0.25 * scaleEyeW) / 0.15, 2)) * Math.exp(-0.5 * Math.pow((y - browY) / 0.06, 2));
+
+        // Lips and labial mound
+        let zLips = 0.0;
+        const mouthYMin = -0.42 + shiftMouthY;
+        const mouthYMax = -0.24 + shiftMouthY;
+        if (y >= mouthYMin && y <= mouthYMax) {
+          const latMouth = Math.exp(-0.5 * Math.pow(x / (0.20 * scaleMouthW), 2));
+          let profile = 0.12 * Math.sin(((y - mouthYMin) / (mouthYMax - mouthYMin)) * Math.PI);
+          const stomionY = -0.34 + shiftMouthY;
+          if (Math.abs(y - stomionY) < 0.03) {
+            profile -= 0.03;
+          }
+          zLips = Math.max(0.0, profile) * latMouth;
+        }
+
+        // Chin protrusion (pogonion)
+        const chinY = -0.58;
+        const zChin = 0.15 * Math.exp(-0.5 * Math.pow(x / 0.16, 2)) * Math.exp(-0.5 * Math.pow((y - chinY) / 0.09, 2));
+
+        // Cheek fullness (zygomatic prominence)
+        const zCheek = 0.05 * Math.exp(-0.5 * Math.pow((Math.abs(x) - 0.35) / 0.14, 2)) * Math.exp(-0.5 * Math.pow((y - (-0.05)) / 0.12, 2));
+
+        let z = zBase + zNose + zOrbit + zBrow + zLips + zChin + zCheek;
+
+        // Multi-view confidence
+        let conf = 0.95;
+        if (Math.abs(x) <= 0.20) {
+          conf = covered.has("front") ? 0.96 : 0.40;
+          if (covered.has("up") && y < -0.3) conf = Math.min(0.99, conf + 0.03);
+          if (covered.has("down") && y > 0.3) conf = Math.min(0.99, conf + 0.03);
+        } else if (x < -0.20) {
+          if (covered.has("left")) {
+            conf = 0.95;
+          } else if (covered.has("front")) {
+            const latFactor = Math.min(1.0, (Math.abs(x) - 0.20) / 0.50);
+            conf = 0.45 - 0.25 * latFactor;
+            z *= 1.0 - 0.15 * latFactor;
+          } else {
+            conf = 0.15;
+          }
+        } else {
+          if (covered.has("right")) {
+            conf = 0.95;
+          } else if (covered.has("front")) {
+            const latFactor = Math.min(1.0, (x - 0.20) / 0.50);
+            conf = 0.45 - 0.25 * latFactor;
+            z *= 1.0 - 0.15 * latFactor;
+          } else {
+            conf = 0.15;
+          }
+        }
+
+        if (y > 0.40 && !covered.has("down")) conf *= 0.88;
+        if (y < -0.45 && !covered.has("up")) conf *= 0.85;
+
+        const idx = vertices.length;
+        vertices.push([
+          Math.round(x * 10000) / 10000,
+          Math.round(y * 10000) / 10000,
+          Math.round(z * 10000) / 10000,
+        ]);
+        confidences.push(Math.round(conf * 1000) / 1000);
+
+        // UV coordinates mapping to portrait face crop
+        const u = Math.max(0.01, Math.min(0.99, 0.50 + x * 0.58));
+        const v = Math.max(0.01, Math.min(0.99, 0.50 - y * 0.54));
+        uvs.push({ u, v });
+
+        gridMap[`${i},${j}`] = idx;
+      }
+    }
+  }
+
+  const triangles = [];
+  for (let j = 0; j < GRID_Y - 1; j++) {
+    for (let i = 0; i < GRID_X - 1; i++) {
+      const p00 = gridMap[`${i},${j}`];
+      const p10 = gridMap[`${i + 1},${j}`];
+      const p01 = gridMap[`${i},${j + 1}`];
+      const p11 = gridMap[`${i + 1},${j + 1}`];
+
+      if (p00 !== undefined && p10 !== undefined && p01 !== undefined && p11 !== undefined) {
+        triangles.push([p00, p01, p10]);
+        triangles.push([p10, p01, p11]);
+      } else if (p00 !== undefined && p01 !== undefined && p10 !== undefined) {
+        triangles.push([p00, p01, p10]);
+      } else if (p10 !== undefined && p01 !== undefined && p11 !== undefined) {
+        triangles.push([p10, p01, p11]);
+      } else if (p00 !== undefined && p11 !== undefined && p10 !== undefined) {
+        triangles.push([p00, p11, p10]);
+      } else if (p00 !== undefined && p01 !== undefined && p11 !== undefined) {
+        triangles.push([p00, p01, p11]);
+      }
+    }
+  }
+
+  return { vertices, triangles, uvs, confidences };
+}
 
 // Detect face sub-region in source photo (isolating face from shoulders and background)
-function getFaceCropRect(img) {
+function getFaceCropRect(img, faceMeta) {
   if (!img || !img.width || !img.height) return null;
-  // If image is already a square aligned crop (e.g. 224x224 or 400x400), use full image
+  if (faceMeta && faceMeta.bbox) {
+    const [bx, by, bw, bh] = faceMeta.bbox;
+    const margin = Math.max(bw, bh) * 0.25;
+    const sx = Math.max(0, Math.round(bx - margin));
+    const sy = Math.max(0, Math.round(by - margin * 1.2));
+    const sw = Math.min(img.width - sx, Math.round(bw + margin * 2));
+    const sh = Math.min(img.height - sy, Math.round(bh + margin * 2.2));
+    const side = Math.min(sw, sh);
+    return { sx, sy, sw: side, sh: side };
+  }
   const aspect = img.width / img.height;
   if (aspect >= 0.92 && aspect <= 1.08) {
     return { sx: 0, sy: 0, sw: img.width, sh: img.height };
   }
-
-  // Portrait framing: center horizontally, upper third vertically
   const side = Math.round(Math.min(img.width, img.height) * 0.82);
   const sx = Math.round((img.width - side) / 2);
-  const sy = Math.round(Math.max(0, (img.height - side) * 0.35));
-  return {
-    sx,
-    sy,
-    sw: side,
-    sh: side,
-  };
+  const sy = Math.round(Math.max(0, (img.height - side) * 0.30));
+  return { sx, sy, sw: side, sh: side };
 }
-
-// Canonical UV coordinates for photo texture projection onto 3D face mesh
-const CANONICAL_UVS = CANONICAL_LANDMARKS.map(([x, y]) => ({
-  u: Math.max(0.01, Math.min(0.99, 0.50 + x * 0.52)),
-  v: Math.max(0.01, Math.min(0.99, 0.50 - y * 0.50)),
-}));
 
 // Affine triangle texture mapping onto canvas 2D path
 function drawTexturedTriangle(ctx, img, p0, p1, p2, uv0, uv1, uv2, intensity, crop) {
@@ -144,7 +282,7 @@ function drawTexturedTriangle(ctx, img, p0, p1, p2, uv0, uv1, uv2, intensity, cr
   ctx.transform(a, b, c, d, e, f);
   ctx.drawImage(img, 0, 0);
 
-  // Apply 3D directional lighting/depth shadow
+  // Apply subtle 3D directional lighting/depth shadow
   if (intensity !== undefined && intensity < 0.98) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.beginPath();
@@ -152,7 +290,7 @@ function drawTexturedTriangle(ctx, img, p0, p1, p2, uv0, uv1, uv2, intensity, cr
     ctx.lineTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.closePath();
-    ctx.fillStyle = `rgba(0, 0, 0, ${Math.max(0, 1.0 - intensity) * 0.45})`;
+    ctx.fillStyle = `rgba(0, 0, 0, ${Math.max(0, 1.0 - intensity) * 0.40})`;
     ctx.fill();
   }
   ctx.restore();
@@ -301,142 +439,143 @@ export default function FaceMesh3DViewer({
       ctx.stroke();
     }
 
-    const vertices = modelData?.vertices || CANONICAL_LANDMARKS;
-    const triangles = modelData?.triangles || CANONICAL_TRIANGLES;
-    const confidences = modelData?.confidence_per_vertex || [];
-
-    // Precalculate trigonometric transforms
-    const cosY = Math.cos(yaw);
-    const sinY = Math.sin(yaw);
-    const cosP = Math.cos(pitch);
-    const sinP = Math.sin(pitch);
-
-    const fov = 3.25 * zoom;
-    const scale = Math.min(w, h) * 0.52;
-
-    // Transform 3D vertices to 2D screen coordinates with perspective projection
-    const transformed = vertices.map((v, idx) => {
-      const [x, y, z] = v;
-      // 1. Yaw (Y-axis)
-      const x1 = x * cosY + z * sinY;
-      const y1 = y;
-      const z1 = -x * sinY + z * cosY;
-
-      // 2. Pitch (X-axis)
-      const x2 = x1;
-      const y2 = y1 * cosP - z1 * sinP;
-      const z2 = y1 * sinP + z1 * cosP;
-
-      // 3. Perspective
-      const cameraDist = 2.25;
-      const depth = cameraDist - z2;
-      const pScale = depth > 0.1 ? fov / depth : 0.01;
-
-      const screenX = w / 2 + x2 * scale * pScale;
-      const screenY = h / 2 - y2 * scale * pScale;
-
-      const conf = confidences[idx] !== undefined ? confidences[idx] : 1.0;
-      const dev = deviations ? deviations[idx] || 0 : 0;
-
-      return { x: screenX, y: screenY, z: z2, origX: x, origY: y, origZ: z, conf, dev, idx };
-    });
-
-    // Light source vector coming from front-top-right
-    const lx = 0.45;
-    const ly = 0.65;
-    const lz = 0.85;
-    const lLen = Math.hypot(lx, ly, lz);
-    const lnx = lx / lLen;
-    const lny = ly / lLen;
-    const lnz = lz / lLen;
-
-    // Determine active texture photo based on yaw rotation
-    let activeTexture = loadedImages.front;
-    if (yaw < -0.3 && loadedImages.left) {
-      activeTexture = loadedImages.left;
-    } else if (yaw > 0.3 && loadedImages.right) {
-      activeTexture = loadedImages.right;
+  // Resolve continuous 3D anatomical face mesh
+  const mesh = useMemo(() => {
+    if (modelData?.vertices && modelData.vertices.length >= 100 && modelData?.triangles) {
+      const uvs = (modelData.uvs && modelData.uvs.length === modelData.vertices.length)
+        ? modelData.uvs
+        : modelData.vertices.map(([x, y]) => ({
+            u: Math.max(0.01, Math.min(0.99, 0.50 + x * 0.58)),
+            v: Math.max(0.01, Math.min(0.99, 0.50 - y * 0.54)),
+          }));
+      return {
+        vertices: modelData.vertices,
+        triangles: modelData.triangles,
+        uvs,
+        confidences: modelData.confidence_per_vertex || [],
+      };
     }
+    const covered = photos && photos.length > 0 ? photos.map((p) => p.angle) : ["front"];
+    return buildAnatomicalFaceMesh(modelData?.face_metadata, covered);
+  }, [modelData, photos]);
 
-    const crop = activeTexture ? getFaceCropRect(activeTexture) : null;
+  const vertices = mesh.vertices;
+  const triangles = mesh.triangles;
+  const uvs = mesh.uvs;
+  const confidences = mesh.confidences;
 
-    // ── 2. SORT TRIANGLES BY DEPTH (Painter's Algorithm) ──
-    const sortedTris = triangles
-      .map((tri, triIdx) => {
-        const v0 = transformed[tri[0]];
-        const v1 = transformed[tri[1]];
-        const v2 = transformed[tri[2]];
-        if (!v0 || !v1 || !v2) return null;
-        const avgZ = (v0.z + v1.z + v2.z) / 3;
-        const avgConf = (v0.conf + v1.conf + v2.conf) / 3;
-        const avgDev = (v0.dev + v1.dev + v2.dev) / 3;
-        return { tri, v0, v1, v2, avgZ, avgConf, avgDev, triIdx };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.avgZ - b.avgZ);
+  // Precalculate trigonometric transforms
+  const cosY = Math.cos(yaw);
+  const sinY = Math.sin(yaw);
+  const cosP = Math.cos(pitch);
+  const sinP = Math.sin(pitch);
 
-    // ── 3. RENDER 3D FACETS ACCORDING TO ACTIVE MODE ──
-    sortedTris.forEach((item) => {
-      const { v0, v1, v2, avgConf, avgDev } = item;
+  const fov = 3.25 * zoom;
+  const scale = Math.min(w, h) * 0.52;
 
-      // Surface normal calculation for 3D Lambertian directional lighting
-      const ax = v1.origX - v0.origX;
-      const ay = v1.origY - v0.origY;
-      const az = v1.origZ - v0.origZ;
-      const bx = v2.origX - v0.origX;
-      const by = v2.origY - v0.origY;
-      const bz = v2.origZ - v0.origZ;
+  // Transform 3D vertices to 2D screen coordinates with perspective projection
+  const transformed = vertices.map((v, idx) => {
+    const [x, y, z] = v;
+    // 1. Yaw (Y-axis)
+    const x1 = x * cosY + z * sinY;
+    const y1 = y;
+    const z1 = -x * sinY + z * cosY;
 
-      let nx = ay * bz - az * by;
-      let ny = az * bx - ax * bz;
-      let nz = ax * by - ay * bx;
-      const nLen = Math.hypot(nx, ny, nz) || 1;
-      nx /= nLen;
-      ny /= nLen;
-      nz /= nLen;
+    // 2. Pitch (X-axis)
+    const x2 = x1;
+    const y2 = y1 * cosP - z1 * sinP;
+    const z2 = y1 * sinP + z1 * cosP;
 
-      // Rotate surface normal with yaw and pitch
-      const rnx = nx * cosY + nz * sinY;
-      const rny = ny * cosP - (-nx * sinY + nz * cosY) * sinP;
-      const rnz = ny * sinP + (-nx * sinY + nz * cosY) * cosP;
+    // 3. Perspective
+    const cameraDist = 2.25;
+    const depth = cameraDist - z2;
+    const pScale = depth > 0.1 ? fov / depth : 0.01;
 
-      // Continuous facial surface shading (two-sided lighting for consistent facet illumination)
-      const dot = Math.abs(rnx * lnx + rny * lny + rnz * lnz);
-      const intensity = 0.45 + 0.55 * dot;
+    const screenX = w / 2 + x2 * scale * pScale;
+    const screenY = h / 2 - y2 * scale * pScale;
 
-      const uv0 = CANONICAL_UVS[item.tri[0]] || { u: 0.5, v: 0.5 };
-      const uv1 = CANONICAL_UVS[item.tri[1]] || { u: 0.5, v: 0.5 };
-      const uv2 = CANONICAL_UVS[item.tri[2]] || { u: 0.5, v: 0.5 };
+    const conf = confidences[idx] !== undefined ? confidences[idx] : 1.0;
+    const dev = deviations ? deviations[idx] || 0 : 0;
+    const uv = uvs[idx] || { u: 0.5, v: 0.5 };
 
-      if (renderMode === "photo") {
-        if (activeTexture) {
-          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity, crop);
-          // Subtle polygonal depth relief
-          ctx.beginPath();
-          ctx.moveTo(v0.x, v0.y);
-          ctx.lineTo(v1.x, v1.y);
-          ctx.lineTo(v2.x, v2.y);
-          ctx.closePath();
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-          ctx.lineWidth = 0.5;
-          ctx.stroke();
-        } else {
-          // Shaded fallback if no photo loaded
-          const r = Math.floor(215 * intensity);
-          const g = Math.floor(168 * intensity);
-          const b = Math.floor(142 * intensity);
-          ctx.beginPath();
-          ctx.moveTo(v0.x, v0.y);
-          ctx.lineTo(v1.x, v1.y);
-          ctx.lineTo(v2.x, v2.y);
-          ctx.closePath();
-          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.92)`;
-          ctx.fill();
-        }
-      } else if (renderMode === "shaded") {
+    return { x: screenX, y: screenY, z: z2, origX: x, origY: y, origZ: z, conf, dev, uv, idx };
+  });
+
+  // Light source vector coming from front-top-right
+  const lx = 0.45;
+  const ly = 0.65;
+  const lz = 0.85;
+  const lLen = Math.hypot(lx, ly, lz);
+  const lnx = lx / lLen;
+  const lny = ly / lLen;
+  const lnz = lz / lLen;
+
+  // Determine active texture photo based on yaw rotation
+  let activeTexture = loadedImages.front;
+  if (yaw < -0.3 && loadedImages.left) {
+    activeTexture = loadedImages.left;
+  } else if (yaw > 0.3 && loadedImages.right) {
+    activeTexture = loadedImages.right;
+  }
+
+  const crop = activeTexture ? getFaceCropRect(activeTexture, modelData?.face_metadata) : null;
+
+  // ── 2. SORT TRIANGLES BY DEPTH (Painter's Algorithm) ──
+  const sortedTris = triangles
+    .map((tri, triIdx) => {
+      const v0 = transformed[tri[0]];
+      const v1 = transformed[tri[1]];
+      const v2 = transformed[tri[2]];
+      if (!v0 || !v1 || !v2) return null;
+      const avgZ = (v0.z + v1.z + v2.z) / 3;
+      const avgConf = (v0.conf + v1.conf + v2.conf) / 3;
+      const avgDev = (v0.dev + v1.dev + v2.dev) / 3;
+      return { tri, v0, v1, v2, avgZ, avgConf, avgDev, triIdx };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.avgZ - b.avgZ);
+
+  // ── 3. RENDER 3D FACETS ACCORDING TO ACTIVE MODE ──
+  sortedTris.forEach((item) => {
+    const { v0, v1, v2, avgConf, avgDev } = item;
+
+    // Surface normal calculation for 3D Lambertian directional lighting
+    const ax = v1.origX - v0.origX;
+    const ay = v1.origY - v0.origY;
+    const az = v1.origZ - v0.origZ;
+    const bx = v2.origX - v0.origX;
+    const by = v2.origY - v0.origY;
+    const bz = v2.origZ - v0.origZ;
+
+    let nx = ay * bz - az * by;
+    let ny = az * bx - ax * bz;
+    let nz = ax * by - ay * bx;
+    const nLen = Math.hypot(nx, ny, nz) || 1;
+    nx /= nLen;
+    ny /= nLen;
+    nz /= nLen;
+
+    // Rotate surface normal with yaw and pitch
+    const rnx = nx * cosY + nz * sinY;
+    const rny = ny * cosP - (-nx * sinY + nz * cosY) * sinP;
+    const rnz = ny * sinP + (-nx * sinY + nz * cosY) * cosP;
+
+    // Continuous facial surface shading (two-sided lighting for consistent facet illumination)
+    const dot = Math.abs(rnx * lnx + rny * lny + rnz * lnz);
+    const intensity = 0.45 + 0.55 * dot;
+
+    const uv0 = v0.uv;
+    const uv1 = v1.uv;
+    const uv2 = v2.uv;
+
+    if (renderMode === "photo") {
+      if (activeTexture) {
+        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity, crop);
+      } else {
+        // Realistic skin tone fallback if photo still loading
         const r = Math.floor(218 * intensity);
-        const g = Math.floor(172 * intensity);
-        const b = Math.floor(145 * intensity);
+        const g = Math.floor(174 * intensity);
+        const b = Math.floor(148 * intensity);
         ctx.beginPath();
         ctx.moveTo(v0.x, v0.y);
         ctx.lineTo(v1.x, v1.y);
@@ -444,90 +583,116 @@ export default function FaceMesh3DViewer({
         ctx.closePath();
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.95)`;
         ctx.fill();
-        ctx.strokeStyle = "rgba(120, 85, 70, 0.20)";
-        ctx.lineWidth = 0.7;
-        ctx.stroke();
-      } else if (renderMode === "wireframe") {
-        if (activeTexture) {
-          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.40, crop);
-        }
-        ctx.beginPath();
-        ctx.moveTo(v0.x, v0.y);
-        ctx.lineTo(v1.x, v1.y);
-        ctx.lineTo(v2.x, v2.y);
-        ctx.closePath();
-        ctx.fillStyle = "rgba(14, 24, 40, 0.35)";
-        ctx.fill();
-        ctx.strokeStyle = "rgba(100, 190, 255, 0.75)";
-        ctx.lineWidth = 1.0;
-        ctx.stroke();
-      } else if (renderMode === "confidence") {
-        if (activeTexture) {
-          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.75, crop);
-        }
-        ctx.beginPath();
-        ctx.moveTo(v0.x, v0.y);
-        ctx.lineTo(v1.x, v1.y);
-        ctx.lineTo(v2.x, v2.y);
-        ctx.closePath();
-        if (avgConf >= 0.85) {
-          ctx.fillStyle = `rgba(34, 197, 94, 0.42)`;
-          ctx.strokeStyle = "rgba(34, 197, 94, 0.85)";
-          ctx.lineWidth = 0.8;
-        } else if (avgConf >= 0.50) {
-          ctx.fillStyle = `rgba(245, 158, 11, 0.52)`;
-          ctx.strokeStyle = "rgba(245, 158, 11, 0.95)";
-          ctx.lineWidth = 1.2;
-        } else {
-          ctx.fillStyle = `rgba(239, 68, 68, 0.62)`;
-          ctx.strokeStyle = "rgba(220, 38, 38, 1.0)";
-          ctx.lineWidth = 1.8;
-        }
-        ctx.fill();
-        ctx.stroke();
-      } else if (renderMode === "comparison") {
-        if (activeTexture) {
-          drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.75, crop);
-        }
-        ctx.beginPath();
-        ctx.moveTo(v0.x, v0.y);
-        ctx.lineTo(v1.x, v1.y);
-        ctx.lineTo(v2.x, v2.y);
-        ctx.closePath();
-        if (avgDev < 0.035) {
-          ctx.fillStyle = `rgba(34, 197, 94, 0.42)`;
-          ctx.strokeStyle = "rgba(34, 197, 94, 0.85)";
-        } else if (avgDev < 0.075) {
-          ctx.fillStyle = `rgba(234, 179, 8, 0.50)`;
-          ctx.strokeStyle = "rgba(234, 179, 8, 0.90)";
-        } else {
-          ctx.fillStyle = `rgba(239, 68, 68, 0.62)`;
-          ctx.strokeStyle = "rgba(239, 68, 68, 1.0)";
-        }
-        ctx.fill();
-        ctx.stroke();
       }
-    });
-
-    // ── 4. GLOWING 3D ANATOMICAL LANDMARKS ──
-    if (renderMode !== "photo" || Math.abs(yaw) > 0.05) {
-      transformed.forEach((pt) => {
-        const nodeRad = Math.max(1.8, Math.min(3.8, (pt.z + 1.0) * 2.0));
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, nodeRad, 0, Math.PI * 2);
-
-        if (renderMode === "confidence") {
-          ctx.fillStyle = pt.conf >= 0.85 ? "#22c55e" : pt.conf >= 0.5 ? "#f59e0b" : "#ef4444";
-        } else if (renderMode === "comparison") {
-          ctx.fillStyle = pt.dev < 0.035 ? "#4ade80" : pt.dev < 0.075 ? "#facc15" : "#f87171";
-        } else if (renderMode === "shaded") {
-          ctx.fillStyle = "#e2b89b";
-        } else {
-          ctx.fillStyle = "rgba(147, 197, 253, 0.85)";
-        }
-        ctx.fill();
-      });
+    } else if (renderMode === "shaded") {
+      const r = Math.floor(218 * intensity);
+      const g = Math.floor(172 * intensity);
+      const b = Math.floor(145 * intensity);
+      ctx.beginPath();
+      ctx.moveTo(v0.x, v0.y);
+      ctx.lineTo(v1.x, v1.y);
+      ctx.lineTo(v2.x, v2.y);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.95)`;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(120, 85, 70, 0.12)";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    } else if (renderMode === "wireframe") {
+      if (activeTexture) {
+        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.40, crop);
+      }
+      ctx.beginPath();
+      ctx.moveTo(v0.x, v0.y);
+      ctx.lineTo(v1.x, v1.y);
+      ctx.lineTo(v2.x, v2.y);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(14, 24, 40, 0.35)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(100, 190, 255, 0.70)";
+      ctx.lineWidth = 0.7;
+      ctx.stroke();
+    } else if (renderMode === "confidence") {
+      if (activeTexture) {
+        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.70, crop);
+      }
+      ctx.beginPath();
+      ctx.moveTo(v0.x, v0.y);
+      ctx.lineTo(v1.x, v1.y);
+      ctx.lineTo(v2.x, v2.y);
+      ctx.closePath();
+      if (avgConf >= 0.85) {
+        ctx.fillStyle = "rgba(34, 197, 94, 0.40)";
+        ctx.strokeStyle = "rgba(34, 197, 94, 0.75)";
+      } else if (avgConf >= 0.50) {
+        ctx.fillStyle = "rgba(245, 158, 11, 0.50)";
+        ctx.strokeStyle = "rgba(245, 158, 11, 0.85)";
+      } else {
+        ctx.fillStyle = "rgba(239, 68, 68, 0.60)";
+        ctx.strokeStyle = "rgba(220, 38, 38, 0.95)";
+      }
+      ctx.lineWidth = 0.8;
+      ctx.fill();
+      ctx.stroke();
+    } else if (renderMode === "comparison") {
+      if (activeTexture) {
+        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.70, crop);
+      }
+      ctx.beginPath();
+      ctx.moveTo(v0.x, v0.y);
+      ctx.lineTo(v1.x, v1.y);
+      ctx.lineTo(v2.x, v2.y);
+      ctx.closePath();
+      if (avgDev < 0.035) {
+        ctx.fillStyle = "rgba(34, 197, 94, 0.40)";
+        ctx.strokeStyle = "rgba(34, 197, 94, 0.75)";
+      } else if (avgDev < 0.075) {
+        ctx.fillStyle = "rgba(234, 179, 8, 0.50)";
+        ctx.strokeStyle = "rgba(234, 179, 8, 0.85)";
+      } else {
+        ctx.fillStyle = "rgba(239, 68, 68, 0.60)";
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.95)";
+      }
+      ctx.lineWidth = 0.8;
+      ctx.fill();
+      ctx.stroke();
     }
+  });
+
+  // ── 4. KEY ANATOMICAL LANDMARKS ──
+  // Show key landmarks in wireframe, confidence, and comparison modes to orient facial features
+  if (renderMode !== "photo") {
+    const keyLandmarks = [
+      transformed.find((p) => Math.abs(p.origX - (-0.28)) < 0.07 && Math.abs(p.origY - 0.18) < 0.07),
+      transformed.find((p) => Math.abs(p.origX - 0.28) < 0.07 && Math.abs(p.origY - 0.18) < 0.07),
+      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.08)) < 0.07),
+      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.30)) < 0.07),
+      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.38)) < 0.07),
+      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.58)) < 0.07),
+      transformed.find((p) => Math.abs(p.origX - (-0.38)) < 0.07 && Math.abs(p.origY) < 0.08),
+      transformed.find((p) => Math.abs(p.origX - 0.38) < 0.07 && Math.abs(p.origY) < 0.08),
+    ].filter(Boolean);
+
+    keyLandmarks.forEach((pt) => {
+      const nodeRad = Math.max(2.2, Math.min(4.2, (pt.z + 1.0) * 2.2));
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, nodeRad, 0, Math.PI * 2);
+
+      if (renderMode === "confidence") {
+        ctx.fillStyle = pt.conf >= 0.85 ? "#22c55e" : pt.conf >= 0.5 ? "#f59e0b" : "#ef4444";
+      } else if (renderMode === "comparison") {
+        ctx.fillStyle = pt.dev < 0.035 ? "#4ade80" : pt.dev < 0.075 ? "#facc15" : "#f87171";
+      } else if (renderMode === "shaded") {
+        ctx.fillStyle = "#e2b89b";
+      } else {
+        ctx.fillStyle = "rgba(147, 197, 253, 0.95)";
+      }
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
 
     // ── 5. 3D COORDINATE AXES INDICATOR ──
     const axisX = 36;
@@ -551,8 +716,7 @@ export default function FaceMesh3DViewer({
     ctx.beginPath();
     ctx.moveTo(axisX, axisY);
     ctx.lineTo(axisX + sinY * axisLen * 0.7, axisY + sinP * axisLen * 0.7);
-    ctx.stroke();
-  }, [modelData, yaw, pitch, zoom, renderMode, deviations, loadedImages, width, height]);
+  }, [mesh, modelData, yaw, pitch, zoom, renderMode, deviations, loadedImages, width, height]);
 
   useEffect(() => {
     render3D();

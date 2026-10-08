@@ -167,118 +167,187 @@ def verify_detailed(
 
 # ── Canonical 3D Facial Mesh Topology & Inconsistency Engine ──────────────
 
-# 52 anatomically referenced 3D landmarks forming a comprehensive facial surface
-# (name, x, y, z, region)
-CANONICAL_3D_LANDMARKS = [
-    # Forehead & hairline (0-5)
-    ("forehead_top_center", 0.0, 0.72, -0.05, "center"),
-    ("forehead_top_left", -0.36, 0.68, -0.16, "left"),
-    ("forehead_top_right", 0.36, 0.68, -0.16, "right"),
-    ("forehead_mid_center", 0.0, 0.52, 0.12, "center"),
-    ("forehead_mid_left", -0.32, 0.50, 0.04, "left"),
-    ("forehead_mid_right", 0.32, 0.50, 0.04, "right"),
-    # Temples & Glabella (6-8)
-    ("temple_left", -0.60, 0.42, -0.22, "left"),
-    ("temple_right", 0.60, 0.42, -0.22, "right"),
-    ("glabella", 0.0, 0.34, 0.24, "center"),
-    # Brows (9-14)
-    ("brow_inner_left", -0.16, 0.34, 0.23, "left"),
-    ("brow_mid_left", -0.36, 0.36, 0.19, "left"),
-    ("brow_outer_left", -0.52, 0.32, 0.06, "left"),
-    ("brow_inner_right", 0.16, 0.34, 0.23, "right"),
-    ("brow_mid_right", 0.36, 0.36, 0.19, "right"),
-    ("brow_outer_right", 0.52, 0.32, 0.06, "right"),
-    # Eyes & Canthi (15-22)
-    ("eye_inner_left", -0.15, 0.20, 0.15, "left"),
-    ("eye_pupil_left", -0.30, 0.20, 0.13, "left"),
-    ("eye_outer_left", -0.46, 0.20, 0.07, "left"),
-    ("eye_upper_left", -0.30, 0.25, 0.17, "left"),
-    ("eye_lower_left", -0.30, 0.15, 0.11, "left"),
-    ("eye_inner_right", 0.15, 0.20, 0.15, "right"),
-    ("eye_pupil_right", 0.30, 0.20, 0.13, "right"),
-    ("eye_outer_right", 0.46, 0.20, 0.07, "right"),
-    ("eye_upper_right", 0.30, 0.25, 0.17, "right"),
-    ("eye_lower_right", 0.30, 0.15, 0.11, "right"),
-    # Nose (25-33)
-    ("nasion", 0.0, 0.22, 0.26, "center"),
-    ("rhinion_mid", 0.0, 0.08, 0.35, "center"),
-    ("supratip", 0.0, -0.04, 0.43, "center"),
-    ("pronasale_tip", 0.0, -0.10, 0.48, "center"),
-    ("subnasale", 0.0, -0.20, 0.32, "center"),
-    ("alar_crest_left", -0.16, -0.11, 0.30, "left"),
-    ("nostril_base_left", -0.12, -0.19, 0.26, "left"),
-    ("alar_crest_right", 0.16, -0.11, 0.30, "right"),
-    ("nostril_base_right", 0.12, -0.19, 0.26, "right"),
-    # Cheeks & Zygoma (34-39)
-    ("suborbital_left", -0.32, 0.05, 0.09, "left"),
-    ("zygomatic_arch_left", -0.58, 0.04, -0.09, "left"),
-    ("cheek_mid_left", -0.42, -0.15, 0.05, "left"),
-    ("suborbital_right", 0.32, 0.05, 0.09, "right"),
-    ("zygomatic_arch_right", 0.58, 0.04, -0.09, "right"),
-    ("cheek_mid_right", 0.42, -0.15, 0.05, "right"),
-    # Perioral & Lips (40-47)
-    ("philtrum", 0.0, -0.25, 0.30, "center"),
-    ("upper_lip_center", 0.0, -0.30, 0.31, "center"),
-    ("cupid_left", -0.09, -0.29, 0.30, "left"),
-    ("cupid_right", 0.09, -0.29, 0.30, "right"),
-    ("stomion_center", 0.0, -0.35, 0.27, "center"),
-    ("lower_lip_center", 0.0, -0.41, 0.29, "center"),
-    ("mouth_corner_left", -0.24, -0.35, 0.19, "left"),
-    ("mouth_corner_right", 0.24, -0.35, 0.19, "right"),
-    # Chin & Mandible (48-56)
-    ("supramentale_crease", 0.0, -0.49, 0.24, "center"),
-    ("pogonion_chin_tip", 0.0, -0.59, 0.28, "center"),
-    ("gnathion_chin_base", 0.0, -0.70, 0.18, "center"),
-    ("chin_body_left", -0.18, -0.63, 0.20, "left"),
-    ("chin_body_right", 0.18, -0.63, 0.20, "right"),
-    ("mandible_angle_left", -0.54, -0.42, -0.18, "left"),
-    ("mandible_angle_right", 0.54, -0.42, -0.18, "right"),
-    ("mid_jawline_left", -0.38, -0.55, -0.02, "left"),
-    ("mid_jawline_right", 0.38, -0.55, -0.02, "right"),
-]
+def build_anatomical_face_mesh(
+    face_meta: dict | None = None,
+    covered_angles: set[str] | list[str] | None = None,
+    grid_x: int = 19,
+    grid_y: int = 23,
+) -> tuple[list[list[float]], list[list[int]], list[float], list[dict[str, float]]]:
+    """Generates a smooth, high-density 3D anatomical human head/face mesh conforming
+    naturally to facial morphology (cranial curvature, protruding nose bridge/tip,
+    orbit depressions, brow ridge, philtrum, lips, pogonion chin, and smooth jawline).
+    Eliminates rigid hexagonal mask boundaries and origami profile crumpling.
+    """
+    import math
 
-# Triangular face mesh indices (triplets of vertex indices) connecting the landmarks into a continuous 3D surface
-CANONICAL_3D_TRIANGLES = [
-    # Forehead
-    [0, 1, 4], [0, 4, 3], [0, 3, 5], [0, 5, 2],
-    [1, 6, 4], [2, 5, 7],
-    # Brow & Glabella
-    [3, 4, 9], [3, 9, 8], [3, 8, 12], [3, 12, 5],
-    [4, 6, 11], [4, 11, 10], [4, 10, 9],
-    [5, 12, 13], [5, 13, 14], [5, 14, 7],
-    # Nose bridge
-    [8, 9, 25], [8, 25, 12],
-    [25, 15, 26], [25, 26, 20],
-    [26, 15, 34], [26, 37, 20],
-    # Eyes
-    [9, 10, 18], [9, 18, 15], [10, 11, 17], [10, 17, 18], [15, 18, 16], [18, 17, 16],
-    [15, 16, 19], [16, 17, 19], [17, 6, 35], [17, 35, 19],
-    [12, 23, 20], [12, 13, 23], [13, 24, 23], [13, 14, 22], [13, 22, 24],
-    [20, 21, 24], [21, 22, 24], [22, 7, 38], [22, 38, 24],
-    # Nose body & tip
-    [26, 34, 30], [26, 30, 27], [26, 27, 32], [26, 32, 37],
-    [27, 30, 28], [27, 28, 32],
-    [28, 30, 31], [28, 31, 29], [28, 29, 33], [28, 33, 32],
-    # Cheeks
-    [19, 35, 36], [19, 36, 34], [34, 36, 30],
-    [24, 39, 38], [24, 37, 39], [37, 32, 39],
-    # Mouth & Philtrum
-    [29, 31, 40], [29, 40, 33],
-    [40, 31, 42], [40, 42, 41], [40, 41, 43], [40, 43, 33],
-    [41, 42, 44], [41, 44, 43],
-    [42, 46, 44], [43, 44, 47],
-    [30, 36, 46], [30, 46, 31], [31, 46, 42],
-    [32, 33, 47], [32, 47, 39], [39, 47, 36],
-    # Lower lip & Chin
-    [44, 46, 45], [44, 45, 47],
-    [45, 46, 48], [45, 48, 47],
-    [48, 46, 51], [48, 51, 49], [48, 49, 52], [48, 52, 47],
-    [49, 51, 50], [49, 50, 52],
-    # Jawline & Mandible
-    [36, 53, 55], [36, 55, 46], [46, 55, 51], [51, 55, 50],
-    [39, 47, 56], [39, 56, 54], [47, 52, 56], [52, 50, 56],
-    [35, 53, 36], [38, 39, 54],
-]
+    covered = set(covered_angles or ["front"])
+
+    scale_eye_w = 1.0
+    shift_eye_y = 0.0
+    shift_nose_y = 0.0
+    scale_nose_z = 1.0
+    shift_mouth_y = 0.0
+    scale_mouth_w = 1.0
+    scale_jaw_w = 1.0
+    scale_face_h = 1.0
+
+    if face_meta and "landmarks" in face_meta and "bbox" in face_meta:
+        lm = face_meta["landmarks"]
+        bx, by, bw, bh = face_meta["bbox"]
+        cx = bx + bw / 2.0
+        cy = by + bh / 2.0
+
+        le_pt = lm.get("left_eye", (bx + bw * 0.34, by + bh * 0.38))
+        re_pt = lm.get("right_eye", (bx + bw * 0.66, by + bh * 0.38))
+        nt_pt = lm.get("nose_tip", (bx + bw * 0.50, by + bh * 0.55))
+        lm_mouth = lm.get("left_mouth", (bx + bw * 0.36, by + bh * 0.72))
+        rm_mouth = lm.get("right_mouth", (bx + bw * 0.64, by + bh * 0.72))
+
+        iod_px = abs(re_pt[0] - le_pt[0])
+        iod_ratio = iod_px / max(1.0, bw)
+        scale_eye_w = max(0.80, min(1.30, iod_ratio / 0.42))
+
+        eye_y_norm = ((le_pt[1] + re_pt[1]) / 2.0 - cy) / max(1.0, bh)
+        shift_eye_y = (-eye_y_norm - 0.20) * 0.35
+
+        nose_y_norm = (nt_pt[1] - cy) / max(1.0, bh)
+        shift_nose_y = (-nose_y_norm - (-0.10)) * 0.45
+
+        mouth_y_norm = ((lm_mouth[1] + rm_mouth[1]) / 2.0 - cy) / max(1.0, bh)
+        shift_mouth_y = (-mouth_y_norm - (-0.35)) * 0.40
+
+        mouth_w_px = abs(rm_mouth[0] - lm_mouth[0])
+        scale_mouth_w = max(0.80, min(1.30, (mouth_w_px / max(1.0, bw)) / 0.38))
+
+        aspect_ratio = bw / max(1.0, bh)
+        scale_jaw_w = max(0.80, min(1.25, aspect_ratio / 0.85))
+        scale_face_h = max(0.85, min(1.20, 0.85 / max(0.5, aspect_ratio)))
+
+    xs = [round(-0.72 + (1.44 * i) / (grid_x - 1), 4) for i in range(grid_x)]
+    ys = [round(0.72 - (1.44 * j) / (grid_y - 1), 4) for j in range(grid_y)]
+
+    vertices = []
+    uvs = []
+    confidences = []
+    grid_map = {}
+
+    for j, raw_y in enumerate(ys):
+        y = round(raw_y * scale_face_h, 4)
+        if y >= 0:
+            w = 0.65 * math.sqrt(max(0.01, 1.0 - ((y - 0.08) / 0.72) ** 2))
+        else:
+            w = 0.65 * scale_jaw_w * (1.0 - 0.38 * (-y / 0.74) ** 1.25)
+
+        for i, x in enumerate(xs):
+            if abs(x) <= w * 1.03:
+                norm_x = x / max(0.08, w)
+                z_base = 0.32 * (1.0 - 0.88 * norm_x ** 2) - 0.12 * (y / 0.74) ** 2
+
+                # 3D Nose pyramid
+                z_nose = 0.0
+                nose_y_min = -0.22 + shift_nose_y
+                nose_y_max = 0.26 + shift_nose_y
+                if nose_y_min <= y <= nose_y_max:
+                    lat = math.exp(-0.5 * (x / 0.12) ** 2)
+                    nose_tip_y = -0.08 + shift_nose_y
+                    if y >= nose_tip_y:
+                        prog = (nose_y_max - y) / max(0.01, nose_y_max - nose_tip_y)
+                        vert = 0.14 + 0.34 * prog
+                    else:
+                        prog = (y - nose_y_min) / max(0.01, nose_tip_y - nose_y_min)
+                        vert = 0.10 + 0.38 * prog
+                    z_nose = vert * lat * scale_nose_z
+
+                # Orbit dips (eye sockets)
+                z_orbit = 0.0
+                eye_dist_x = abs(x) - 0.28 * scale_eye_w
+                eye_y = 0.18 + shift_eye_y
+                d_eye = math.sqrt(eye_dist_x ** 2 + ((y - eye_y) / 0.85) ** 2)
+                if d_eye < 0.14:
+                    z_orbit = -0.08 * (1.0 - (d_eye / 0.14) ** 2)
+
+                # Brow ridge
+                brow_y = 0.31 + shift_eye_y
+                z_brow = 0.05 * math.exp(-0.5 * ((abs(x) - 0.25 * scale_eye_w) / 0.15) ** 2) * math.exp(-0.5 * ((y - brow_y) / 0.06) ** 2)
+
+                # Lips
+                z_lips = 0.0
+                mouth_y_min = -0.42 + shift_mouth_y
+                mouth_y_max = -0.24 + shift_mouth_y
+                if mouth_y_min <= y <= mouth_y_max:
+                    lat_mouth = math.exp(-0.5 * (x / (0.20 * scale_mouth_w)) ** 2)
+                    profile = 0.12 * math.sin(((y - mouth_y_min) / (mouth_y_max - mouth_y_min)) * math.pi)
+                    stomion_y = -0.34 + shift_mouth_y
+                    if abs(y - stomion_y) < 0.03:
+                        profile -= 0.03
+                    z_lips = max(0.0, profile) * lat_mouth
+
+                # Chin
+                chin_y = -0.58
+                z_chin = 0.15 * math.exp(-0.5 * (x / 0.16) ** 2) * math.exp(-0.5 * ((y - chin_y) / 0.09) ** 2)
+
+                # Cheek fullness
+                z_cheek = 0.05 * math.exp(-0.5 * ((abs(x) - 0.35) / 0.14) ** 2) * math.exp(-0.5 * ((y - (-0.05)) / 0.12) ** 2)
+
+                z = z_base + z_nose + z_orbit + z_brow + z_lips + z_chin + z_cheek
+
+                # Multi-view confidence
+                if abs(x) <= 0.20:
+                    conf = 0.96 if "front" in covered else 0.40
+                    if "up" in covered and y < -0.3: conf = min(0.99, conf + 0.03)
+                    if "down" in covered and y > 0.3: conf = min(0.99, conf + 0.03)
+                elif x < -0.20:
+                    if "left" in covered:
+                        conf = 0.95
+                    elif "front" in covered:
+                        lat_factor = min(1.0, (abs(x) - 0.20) / 0.50)
+                        conf = 0.45 - 0.25 * lat_factor
+                        z *= (1.0 - 0.15 * lat_factor)
+                    else:
+                        conf = 0.15
+                else:
+                    if "right" in covered:
+                        conf = 0.95
+                    elif "front" in covered:
+                        lat_factor = min(1.0, (x - 0.20) / 0.50)
+                        conf = 0.45 - 0.25 * lat_factor
+                        z *= (1.0 - 0.15 * lat_factor)
+                    else:
+                        conf = 0.15
+
+                if y > 0.40 and "down" not in covered: conf *= 0.88
+                if y < -0.45 and "up" not in covered: conf *= 0.85
+
+                idx = len(vertices)
+                vertices.append([round(float(x), 4), round(float(y), 4), round(float(z), 4)])
+                confidences.append(round(min(1.0, max(0.1, conf)), 3))
+
+                u = round(float(max(0.01, min(0.99, 0.50 + x * 0.58))), 4)
+                v = round(float(max(0.01, min(0.99, 0.50 - y * 0.54))), 4)
+                uvs.append({"u": u, "v": v})
+
+                grid_map[(i, j)] = idx
+
+    triangles = []
+    for j in range(grid_y - 1):
+        for i in range(grid_x - 1):
+            p00 = grid_map.get((i, j))
+            p10 = grid_map.get((i + 1, j))
+            p01 = grid_map.get((i, j + 1))
+            p11 = grid_map.get((i + 1, j + 1))
+            if p00 is not None and p10 is not None and p01 is not None and p11 is not None:
+                triangles.append([p00, p01, p10])
+                triangles.append([p10, p01, p11])
+            elif p00 is not None and p01 is not None and p10 is not None:
+                triangles.append([p00, p01, p10])
+            elif p10 is not None and p01 is not None and p11 is not None:
+                triangles.append([p10, p01, p11])
+            elif p00 is not None and p11 is not None and p10 is not None:
+                triangles.append([p00, p11, p10])
+            elif p00 is not None and p01 is not None and p11 is not None:
+                triangles.append([p00, p01, p11])
+
+    return vertices, triangles, confidences, uvs
 
 
 def reconstruct_3d_face_model(
@@ -321,14 +390,13 @@ def reconstruct_3d_face_model(
         except Exception:
             face_meta = None
 
-    scale_eye_w = 1.0
-    shift_eye_y = 0.0
-    shift_nose_y = 0.0
-    scale_nose_z = 1.0
-    shift_mouth_y = 0.0
-    scale_mouth_w = 1.0
+    # Build smooth, high-density 3D anatomical face mesh adapted to the individual
+    vertices_out, triangles_out, confidence_per_vertex, uvs_out = build_anatomical_face_mesh(
+        face_meta=face_meta,
+        covered_angles=covered,
+    )
+
     scale_jaw_w = 1.0
-    scale_face_h = 1.0
     iod_px = 60.0
     bw = 150.0
     bh = 180.0
@@ -339,93 +407,12 @@ def reconstruct_3d_face_model(
     if face_meta and "landmarks" in face_meta and "bbox" in face_meta:
         lm = face_meta["landmarks"]
         bx, by, bw, bh = face_meta["bbox"]
-        cx = bx + bw / 2.0
-        cy = by + bh / 2.0
-
         le_pt = lm.get("left_eye", (bx + bw * 0.34, by + bh * 0.38))
         re_pt = lm.get("right_eye", (bx + bw * 0.66, by + bh * 0.38))
         nt_pt = lm.get("nose_tip", (bx + bw * 0.50, by + bh * 0.55))
-        lm_mouth = lm.get("left_mouth", (bx + bw * 0.36, by + bh * 0.72))
-        rm_mouth = lm.get("right_mouth", (bx + bw * 0.64, by + bh * 0.72))
-
         iod_px = abs(re_pt[0] - le_pt[0])
-        iod_ratio = iod_px / max(1.0, bw)
-        scale_eye_w = max(0.80, min(1.30, iod_ratio / 0.42))
-
-        eye_y_norm = ((le_pt[1] + re_pt[1]) / 2.0 - cy) / max(1.0, bh)
-        shift_eye_y = (-eye_y_norm - 0.20) * 0.35
-
-        nose_y_norm = (nt_pt[1] - cy) / max(1.0, bh)
-        shift_nose_y = (-nose_y_norm - (-0.10)) * 0.45
-
-        mouth_y_norm = ((lm_mouth[1] + rm_mouth[1]) / 2.0 - cy) / max(1.0, bh)
-        shift_mouth_y = (-mouth_y_norm - (-0.35)) * 0.40
-
-        mouth_w_px = abs(rm_mouth[0] - lm_mouth[0])
-        scale_mouth_w = max(0.80, min(1.30, (mouth_w_px / max(1.0, bw)) / 0.38))
-
         aspect_ratio = bw / max(1.0, bh)
         scale_jaw_w = max(0.80, min(1.25, aspect_ratio / 0.85))
-        scale_face_h = max(0.85, min(1.20, 0.85 / max(0.5, aspect_ratio)))
-
-    # Calculate per-vertex 3D coordinates adapted to the individual
-    vertices_out = []
-    confidence_per_vertex = []
-
-    for name, x, y, z, region in CANONICAL_3D_LANDMARKS:
-        vx, vy, vz = x, y, z
-
-        # Morph canonical coordinates to match detected individual face features
-        if region in ("left", "right") and "eye" in name:
-            vx *= scale_eye_w
-            vy += shift_eye_y
-        elif "brow" in name:
-            vx *= scale_eye_w
-            vy += shift_eye_y
-        elif "nose" in name or "nasal" in name or "rhinion" in name or "nasion" in name or "pronasale" in name or "subnasale" in name:
-            vy += shift_nose_y
-            vz *= scale_nose_z
-        elif "lip" in name or "mouth" in name or "stomion" in name or "cupid" in name or "philtrum" in name:
-            vx *= scale_mouth_w
-            vy += shift_mouth_y
-        elif "chin" in name or "mandible" in name or "gnathion" in name or "pogonion" in name:
-            vx *= scale_jaw_w
-            vy *= scale_face_h
-        elif "zygomatic" in name or "cheek" in name:
-            vx *= scale_jaw_w
-
-        # Calculate vertex confidence based on multi-view presence
-        if region == "center":
-            conf = 0.96 if "front" in covered else 0.40
-            if "up" in covered and y < -0.3:
-                conf = min(0.99, conf + 0.03)
-        elif region == "left":
-            if "left" in covered:
-                conf = 0.95
-            elif "front" in covered:
-                conf = 0.32
-                vz *= 0.85  # lateral depth flattened due to lack of oblique constraint
-            else:
-                conf = 0.15
-        elif region == "right":
-            if "right" in covered:
-                conf = 0.95
-            elif "front" in covered:
-                conf = 0.32
-                vz *= 0.85
-            else:
-                conf = 0.15
-        else:
-            conf = 0.50
-
-        # Adjust vertical tilt accuracy
-        if y > 0.4 and "down" not in covered:
-            conf *= 0.88
-        if y < -0.45 and "up" not in covered:
-            conf *= 0.82
-
-        vertices_out.append([round(vx, 4), round(vy, 4), round(vz, 4)])
-        confidence_per_vertex.append(round(min(1.0, max(0.1, conf)), 3))
 
     # Identify specific inconsistencies & information blind spots
     inconsistencies = []
@@ -490,8 +477,9 @@ def reconstruct_3d_face_model(
 
     return {
         "vertices": vertices_out,
-        "triangles": CANONICAL_3D_TRIANGLES,
+        "triangles": triangles_out,
         "confidence_per_vertex": confidence_per_vertex,
+        "uvs": uvs_out,
         "completeness_score": completeness,
         "covered_angles": list(covered),
         "missing_angles": missing,
@@ -503,7 +491,7 @@ def reconstruct_3d_face_model(
             "nose_protrusion_mm": round(nose_protrusion, 1),
             "jaw_breadth_mm": round(jaw_breadth, 1),
             "total_landmarks": len(vertices_out),
-            "total_polygons": len(CANONICAL_3D_TRIANGLES),
+            "total_polygons": len(triangles_out),
         },
     }
 

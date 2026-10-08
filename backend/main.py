@@ -502,12 +502,14 @@ class Face3DModelData(BaseModel):
     vertices: list[list[float]]
     triangles: list[list[int]]
     confidence_per_vertex: list[float]
+    uvs: list[dict[str, float]] | None = None
     completeness_score: int
     covered_angles: list[str]
     missing_angles: list[str]
     inconsistencies: list[FaceInconsistencyItem]
     more_info_prompt: FaceMoreInfoPrompt
     anthropometrics: FaceAnthropometrics
+    face_metadata: dict | None = None
 
 
 class FaceVerifyResponse(BaseModel):
