@@ -75,6 +75,9 @@ const CANONICAL_TRIANGLES = [
   [35, 53, 36], [38, 39, 54],
 ];
 
+// Facial perimeter contour indices
+const CONTOUR_INDICES = [0, 1, 6, 35, 53, 55, 51, 50, 52, 56, 54, 38, 7, 2, 0];
+
 // Detect face sub-region in source photo (isolating face from shoulders and background)
 function getFaceCropRect(img) {
   if (!img || !img.width || !img.height) return null;
