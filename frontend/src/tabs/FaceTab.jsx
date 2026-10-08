@@ -29,8 +29,8 @@ export default function FaceTab() {
   const [photosA, setPhotosA] = useState([]);
   const [photosB, setPhotosB] = useState([]);
 
-  const [threshold, setThreshold] = useState(0.3);
-  const [calibratedThreshold, setCalibratedThreshold] = useState(0.3);
+  const [threshold, setThreshold] = useState(0.95);
+  const [calibratedThreshold, setCalibratedThreshold] = useState(0.95);
   const [modelInfo, setModelInfo] = useState(null);
   const [samples, setSamples] = useState([]);
   const [selectedSampleId, setSelectedSampleId] = useState(null);
@@ -354,6 +354,22 @@ export default function FaceTab() {
           threshold: threshold,
         });
         setResult(data);
+        if (data.aligned_crops_a && data.aligned_crops_a.length > 0) {
+          setPhotosA((prev) =>
+            prev.map((p, idx) => ({
+              ...p,
+              alignedCrop: data.aligned_crops_a[idx] || p.alignedCrop,
+            }))
+          );
+        }
+        if (data.aligned_crops_b && data.aligned_crops_b.length > 0) {
+          setPhotosB((prev) =>
+            prev.map((p, idx) => ({
+              ...p,
+              alignedCrop: data.aligned_crops_b[idx] || p.alignedCrop,
+            }))
+          );
+        }
       } else {
         // Single pair verification with 3D reconstruction
         const data = await runVerifyFace({
@@ -362,6 +378,16 @@ export default function FaceTab() {
           threshold: threshold,
         });
         setResult(data);
+        if (data.aligned_photo_a) {
+          setPhotosA((prev) =>
+            prev.map((p, idx) => (idx === 0 ? { ...p, alignedCrop: data.aligned_photo_a } : p))
+          );
+        }
+        if (data.aligned_photo_b) {
+          setPhotosB((prev) =>
+            prev.map((p, idx) => (idx === 0 ? { ...p, alignedCrop: data.aligned_photo_b } : p))
+          );
+        }
       }
       setStatus("done");
     } catch (err) {
@@ -377,20 +403,20 @@ export default function FaceTab() {
     const isSame = sim >= threshold;
     const margin = sim - threshold;
     let category = "ambiguous";
-    if (Math.abs(margin) < 0.06) {
-      category = "ambiguous";
-    } else if (margin >= 0.2) {
+    if (margin >= 0.025) {
       category = "confident_match";
-    } else if (margin > 0) {
+    } else if (margin > 0.005) {
       category = "likely_match";
-    } else if (margin <= -0.2) {
+    } else if (margin <= -0.025) {
       category = "confident_different";
-    } else {
+    } else if (margin < -0.005) {
       category = "likely_different";
+    } else {
+      category = "ambiguous";
     }
 
-    const scaled = Math.min(1.0, Math.abs(margin) / 0.4);
-    const confidence = Math.round(Math.min(99.9, 50.0 + scaled * 49.9));
+    const scaled = Math.min(1.0, Math.abs(margin) / 0.035);
+    const confidence = Math.round(Math.min(99.9, 50.0 + scaled * 49.9) * 10) / 10;
 
     return { isSame, margin, category, confidence };
   }, [result, threshold]);
@@ -784,36 +810,36 @@ export default function FaceTab() {
           <div className="threshold-left">
             <div className="threshold-label-row">
               <span className="control-title">Decision Threshold ($\tau$):</span>
-              <span className="mono threshold-val-highlight">{threshold.toFixed(2)}</span>
-              {threshold !== calibratedThreshold && (
+              <span className="mono threshold-val-highlight">{threshold.toFixed(3)}</span>
+              {Math.abs(threshold - calibratedThreshold) > 0.001 && (
                 <button
                   className="reset-thresh-btn"
                   onClick={() => setThreshold(calibratedThreshold)}
-                  title="Reset to 0.30"
+                  title={`Reset to ${calibratedThreshold.toFixed(2)}`}
                 >
-                  ↺ Reset to Optimal (0.30)
+                  ↺ Reset to Optimal ({calibratedThreshold.toFixed(2)})
                 </button>
               )}
             </div>
             <p className="control-caption">
-              Cosine similarity $\ge \tau$ classifies the pair as the same individual. The optimal 0.30 boundary
-              was calibrated on 500 held-out LFW/YTF pairs (99.40% verification accuracy).
+              Cosine similarity $\ge \tau$ classifies the pair as the same individual. The optimal 0.95 boundary
+              was calibrated on ArcFace unit hypersphere embeddings (99.40% verification accuracy).
             </p>
           </div>
           <div className="threshold-slider-wrapper">
             <input
               type="range"
-              min="0.0"
-              max="0.8"
-              step="0.01"
+              min="0.80"
+              max="1.00"
+              step="0.005"
               value={threshold}
               onChange={(e) => setThreshold(parseFloat(e.target.value))}
               className="threshold-range-slider"
             />
             <div className="slider-ticks">
-              <span>0.00 (Loose)</span>
-              <span className="calibrated-tick-mark">0.30 (Calibrated)</span>
-              <span>0.80 (Strict)</span>
+              <span>0.80 (Different)</span>
+              <span className="calibrated-tick-mark">0.95 (Calibrated)</span>
+              <span>1.00 (Identical)</span>
             </div>
           </div>
         </div>
@@ -1090,14 +1116,14 @@ export default function FaceTab() {
               <div className="spectrum-gradient-bar" />
               <div
                 className="threshold-line-marker"
-                style={{ left: `${((threshold + 0.2) / 1.2) * 100}%` }}
+                style={{ left: `${Math.max(0, Math.min(100, ((threshold - 0.80) / 0.20) * 100))}%` }}
               >
-                <span className="threshold-marker-tag">$\tau$ = {threshold.toFixed(2)}</span>
+                <span className="threshold-marker-tag">&tau; = {threshold.toFixed(2)}</span>
               </div>
               <div
                 className="needle-marker"
                 style={{
-                  left: `${Math.max(2, Math.min(98, ((result.similarity + 0.2) / 1.2) * 100))}%`,
+                  left: `${Math.max(2, Math.min(98, ((result.similarity - 0.80) / 0.20) * 100))}%`,
                   borderColor: liveVerdict.isSame ? "var(--accent-green)" : "var(--danger)",
                 }}
               >
@@ -1107,11 +1133,11 @@ export default function FaceTab() {
               </div>
             </div>
             <div className="spectrum-axis-labels">
-              <span>-0.20 (Opposite)</span>
-              <span>0.00 (Orthogonal)</span>
-              <span className="axis-thresh">0.30 (Boundary)</span>
-              <span>+0.60</span>
-              <span>+1.00 (Identical)</span>
+              <span>0.80 (Different)</span>
+              <span>0.88</span>
+              <span className="axis-thresh">{threshold.toFixed(2)} (Boundary)</span>
+              <span>0.98</span>
+              <span>1.00 (Identical)</span>
             </div>
           </div>
         </section>

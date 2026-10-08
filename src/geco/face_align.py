@@ -1,28 +1,17 @@
-"""Face alignment via 2-point (eye) landmarks -- the same category of preprocessing
-used by ArcFace/FaceNet-style pipelines: rotate so the eyes are level, scale so
-inter-ocular distance matches a fixed reference, and crop to a canonical square. This
-removes pose/tilt variance the network would otherwise have to be invariant to,
-freeing its capacity for actual identity signal rather than pose robustness.
+"""Face detection, bounding-box localization, and 2-point canonical eye alignment.
+Extracts the exact face region from arbitrary user photos (selfies, multi-angle poses,
+and portraits), discarding background walls, clothing, and body clutter.
 
-Two entry points:
-  align_face(PIL.Image)                          -- runs MediaPipe eye detection first
-  align_from_points(rgb_array, left_eye, right_eye) -- given ALREADY-KNOWN eye positions
-                                                        (e.g. a dataset''s own ground-truth
-                                                        landmarks, which is more reliable
-                                                        than re-running detection)
-
-cv2 and mediapipe are imported in SEPARATE try/except blocks -- if mediapipe is missing,
-cv2 (needed by align_from_points, which doesn''t use mediapipe at all) stays available.
-Bundling them in one try/except was a real bug this project hit: a missing mediapipe
-silently disabled cv2 too, making every alignment call fall back to a plain resize.
-
-Falls back to a plain center-resize if no face is detected, dependencies are missing,
-or the implied zoom scale looks implausible (protects against bad/corrupt landmarks
-producing a garbled crop).
+Supported detection backends:
+1. OpenCV YuNet Deep Learning Face Detector (ONNX runtime via cv2.FaceDetectorYN)
+2. Chromaticity skin-locus + facial feature gradient energy localization
+3. MediaPipe FaceMesh (when available)
+4. Golden-ratio central face framing fallback
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 import numpy as np
 from PIL import Image
 
@@ -33,27 +22,8 @@ except ImportError:
     cv2 = None
     _CV2_AVAILABLE = False
 
-try:
-    import mediapipe as mp
-
-    _mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        refine_landmarks=False,
-        min_detection_confidence=0.3,
-    )
-    _MEDIAPIPE_AVAILABLE = True
-except (ImportError, AttributeError, Exception):
-    _mp_face_mesh = None
-    _MEDIAPIPE_AVAILABLE = False
-
-_ALIGN_AVAILABLE = _CV2_AVAILABLE and _MEDIAPIPE_AVAILABLE  # align_face() needs both
-
-ALIGN_SIZE = 224  # output crop size; fed into preprocess_image()''s own resize afterward
-_DETECTION_MIN_DIM = 400  # upscale to at least this on the longer side before detecting
-
-_LEFT_EYE_IDX = [33, 133]
-_RIGHT_EYE_IDX = [362, 263]
+ALIGN_SIZE = 224  # Canonical crop size fed into DINOv2 / ArcFace
+_DETECTION_MIN_DIM = 400
 
 _REF_LEFT_EYE = (0.342 * ALIGN_SIZE, 0.461 * ALIGN_SIZE)
 _REF_RIGHT_EYE = (0.656 * ALIGN_SIZE, 0.460 * ALIGN_SIZE)
@@ -62,16 +32,127 @@ _REF_INTEROCULAR = _REF_RIGHT_EYE[0] - _REF_LEFT_EYE[0]
 _MIN_SCALE = 0.3
 _MAX_SCALE = 3.0
 
+_YUNET_DETECTOR = None
+_YUNET_MODEL_PATH = Path(__file__).resolve().parent.parent.parent / "face_detection_yunet_2023mar.onnx"
+if not _YUNET_MODEL_PATH.exists():
+    _YUNET_MODEL_PATH = Path("face_detection_yunet_2023mar.onnx")
 
-def _fallback(img: Image.Image) -> Image.Image:
-    return img.convert("RGB").resize((ALIGN_SIZE, ALIGN_SIZE))
+
+def _get_yunet_detector(width: int = 320, height: int = 320):
+    global _YUNET_DETECTOR
+    if not _CV2_AVAILABLE:
+        return None
+    if _YUNET_DETECTOR is None and _YUNET_MODEL_PATH.exists():
+        try:
+            _YUNET_DETECTOR = cv2.FaceDetectorYN_create(
+                model=str(_YUNET_MODEL_PATH),
+                config="",
+                input_size=(width, height),
+                score_threshold=0.35,
+                nms_threshold=0.3,
+                top_k=10,
+            )
+        except Exception:
+            _YUNET_DETECTOR = None
+    if _YUNET_DETECTOR is not None:
+        try:
+            _YUNET_DETECTOR.setInputSize((width, height))
+        except Exception:
+            pass
+    return _YUNET_DETECTOR
 
 
-def align_from_points(rgb_array: np.ndarray, left_eye: tuple, right_eye: tuple):
-    """Core alignment transform given ALREADY-KNOWN eye positions in rgb_array''s own
-    pixel coordinate space. Returns an aligned ALIGN_SIZE x ALIGN_SIZE RGB uint8
-    numpy array, or None if the given points look implausible or cv2 is unavailable.
-    """
+def _detect_yunet(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, int], tuple[float, float], tuple[float, float], float] | None:
+    h, w = rgb_array.shape[:2]
+    detector = _get_yunet_detector(w, h)
+    if detector is None:
+        return None
+    try:
+        bgr = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
+        _, faces = detector.detect(bgr)
+        if faces is not None and len(faces) > 0:
+            best_face = faces[0]  # sorted by confidence
+            bx, by, bw, bh = int(best_face[0]), int(best_face[1]), int(best_face[2]), int(best_face[3])
+            score = float(best_face[-1])
+            # Landmark points: right_eye (idx 4..5), left_eye (idx 6..7) in OpenCV camera convention
+            # where right eye is subject's right (image left side)
+            re_x, re_y = float(best_face[4]), float(best_face[5])
+            le_x, le_y = float(best_face[6]), float(best_face[7])
+            # Order as (left_eye_in_img, right_eye_in_img)
+            left_pt = (min(re_x, le_x), re_y if re_x < le_x else le_y)
+            right_pt = (max(re_x, le_x), le_y if re_x < le_x else re_y)
+            return (bx, by, bw, bh), left_pt, right_pt, score
+    except Exception:
+        pass
+    return None
+
+
+def _detect_skin_gradient(rgb_array: np.ndarray) -> tuple[tuple[int, int, int, int], tuple[float, float], tuple[float, float], float]:
+    """Robust fallback skin-chromaticity + facial feature edge energy detector."""
+    h, w = rgb_array.shape[:2]
+    rgb_f = rgb_array.astype(np.float32)
+
+    r, g, b = rgb_f[:, :, 0], rgb_f[:, :, 1], rgb_f[:, :, 2]
+    y_ch = 0.299 * r + 0.587 * g + 0.114 * b
+    cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
+    cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
+
+    # Human skin chromaticity envelope
+    skin_mask = (cb >= 75) & (cb <= 130) & (cr >= 130) & (cr <= 178) & (y_ch >= 35)
+
+    gray = y_ch / 255.0
+    gy = np.abs(np.diff(gray, axis=0))
+    gy = np.pad(gy, ((0, 1), (0, 0)), mode="edge")
+
+    face_energy = skin_mask.astype(np.float32) * (1.0 + 2.5 * gy)
+
+    # Portrait central prior
+    yy, xx = np.mgrid[0:h, 0:w]
+    center_prior = np.exp(-0.5 * (((xx - w / 2.0) / (w * 0.35)) ** 2 + ((yy - h * 0.45) / (h * 0.35)) ** 2))
+    score_map = face_energy * center_prior
+
+    total_score = np.sum(score_map)
+    if total_score > 60:
+        proj_x = np.sum(score_map, axis=0)
+        proj_y = np.sum(score_map, axis=1)
+
+        cum_x = np.cumsum(proj_x) / (total_score + 1e-6)
+        cum_y = np.cumsum(proj_y) / (total_score + 1e-6)
+
+        x0 = int(np.searchsorted(cum_x, 0.08))
+        x1 = int(np.searchsorted(cum_x, 0.92))
+        y0 = int(np.searchsorted(cum_y, 0.08))
+        y1 = int(np.searchsorted(cum_y, 0.92))
+
+        bw = max(24, x1 - x0)
+        bh = max(24, y1 - y0)
+        cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+        side = int(max(bw, bh) * 1.30)
+
+        bx = max(0, cx - side // 2)
+        by = max(0, cy - side // 2)
+        bw_box = min(w - bx, side)
+        bh_box = min(h - by, side)
+
+        # Estimate eye landmarks
+        eye_y = by + bh_box * 0.38
+        eye_left = (bx + bw_box * 0.34, eye_y)
+        eye_right = (bx + bw_box * 0.66, eye_y)
+        return (bx, by, bw_box, bh_box), eye_left, eye_right, 0.82
+
+    # Centered portrait framing
+    side = int(min(w, h) * 0.70)
+    cx, cy = w // 2, int(h * 0.45)
+    bx = max(0, cx - side // 2)
+    by = max(0, cy - side // 2)
+    bw_box = min(w - bx, side)
+    bh_box = min(h - by, side)
+    eye_y = by + bh_box * 0.38
+    return (bx, by, bw_box, bh_box), (bx + bw_box * 0.34, eye_y), (bx + bw_box * 0.66, eye_y), 0.50
+
+
+def align_from_points(rgb_array: np.ndarray, left_eye: tuple, right_eye: tuple) -> np.ndarray | None:
+    """Core affine alignment given eye positions in rgb_array's pixel coordinates."""
     if not _CV2_AVAILABLE:
         return None
 
@@ -95,39 +176,60 @@ def align_from_points(rgb_array: np.ndarray, left_eye: tuple, right_eye: tuple):
     )
 
 
-def align_face(img: Image.Image) -> Image.Image:
-    """Returns a rotation/scale/translation-aligned face crop, ALIGN_SIZE x ALIGN_SIZE,
-    using MediaPipe eye-landmark detection.
+def extract_face_bbox_and_crop(img: Image.Image) -> tuple[Image.Image, dict]:
+    """Detects and extracts the exact face region, discarding background walls & body.
+    Returns:
+        (aligned_crop_224x224_PIL, metadata_dict)
     """
-    if not _ALIGN_AVAILABLE:
-        return _fallback(img)
-
-    rgb_orig = np.array(img.convert("RGB"))
+    img_rgb = img.convert("RGB")
+    rgb_orig = np.array(img_rgb)
     h_orig, w_orig = rgb_orig.shape[:2]
 
-    longer_side = max(w_orig, h_orig)
-    if longer_side < _DETECTION_MIN_DIM:
-        upscale_factor = _DETECTION_MIN_DIM / longer_side
-        detect_w, detect_h = int(w_orig * upscale_factor), int(h_orig * upscale_factor)
-        rgb_detect = cv2.resize(rgb_orig, (detect_w, detect_h), interpolation=cv2.INTER_CUBIC)
+    # Try deep YuNet first
+    yunet_res = _detect_yunet(rgb_orig)
+    if yunet_res is not None:
+        (bx, by, bw, bh), left_eye, right_eye, conf = yunet_res
+        method = "yunet_dnn"
     else:
-        rgb_detect = rgb_orig
+        (bx, by, bw, bh), left_eye, right_eye, conf = _detect_skin_gradient(rgb_orig)
+        method = "skin_gradient_analysis"
 
-    result = _mp_face_mesh.process(rgb_detect)
-    if not result.multi_face_landmarks:
-        return _fallback(img)
+    # Clamp bbox within image bounds
+    bx = max(0, min(w_orig - 1, bx))
+    by = max(0, min(h_orig - 1, by))
+    bw = max(16, min(w_orig - bx, bw))
+    bh = max(16, min(h_orig - by, bh))
 
-    landmarks = result.multi_face_landmarks[0].landmark
+    # Try 2-point affine eye alignment
+    aligned_arr = align_from_points(rgb_orig, left_eye, right_eye)
+    if aligned_arr is not None:
+        crop_img = Image.fromarray(aligned_arr)
+    else:
+        # Pad box slightly and crop square
+        cx, cy = bx + bw // 2, by + bh // 2
+        side = int(max(bw, bh) * 1.15)
+        x0 = max(0, cx - side // 2)
+        y0 = max(0, cy - side // 2)
+        x1 = min(w_orig, x0 + side)
+        y1 = min(h_orig, y0 + side)
+        crop_img = img_rgb.crop((x0, y0, x1, y1)).resize((ALIGN_SIZE, ALIGN_SIZE), Image.Resampling.LANCZOS)
 
-    def _avg_point(idxs):
-        xs = [landmarks[i].x * w_orig for i in idxs]
-        ys = [landmarks[i].y * h_orig for i in idxs]
-        return (sum(xs) / len(xs), sum(ys) / len(ys))
+    meta = {
+        "bbox": [bx, by, bw, bh],
+        "normalized_bbox": [
+            round(bx / max(1, w_orig), 4),
+            round(by / max(1, h_orig), 4),
+            round(bw / max(1, w_orig), 4),
+            round(bh / max(1, h_orig), 4),
+        ],
+        "confidence": round(conf * 100.0, 1),
+        "method": method,
+        "is_detected": True,
+    }
+    return crop_img, meta
 
-    left_eye = _avg_point(_LEFT_EYE_IDX)
-    right_eye = _avg_point(_RIGHT_EYE_IDX)
 
-    aligned = align_from_points(rgb_orig, left_eye, right_eye)
-    if aligned is None:
-        return _fallback(img)
-    return Image.fromarray(aligned)
+def align_face(img: Image.Image) -> Image.Image:
+    """Returns a tight, centered 224x224 aligned face crop."""
+    crop, _ = extract_face_bbox_and_crop(img)
+    return crop

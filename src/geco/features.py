@@ -42,8 +42,16 @@ def load_dinov2(variant: str = "dinov2_vitb14", device: torch.device | None = No
         variant: one of dinov2_vits14 / vitb14 / vitl14 / vitg14.
         device: target device; auto-detected if omitted.
     """
+    from pathlib import Path
     device = device or get_device()
-    model = torch.hub.load("facebookresearch/dinov2", variant)
+    local_hub = Path.home() / ".cache" / "torch" / "hub" / "facebookresearch_dinov2_main"
+    if local_hub.exists():
+        model = torch.hub.load(str(local_hub), variant, source="local", pretrained=True)
+    else:
+        try:
+            model = torch.hub.load("facebookresearch/dinov2", variant, skip_validation=True)
+        except Exception:
+            model = torch.hub.load("facebookresearch/dinov2", variant)
     model = model.to(device).eval()
     for param in model.parameters():
         param.requires_grad = False

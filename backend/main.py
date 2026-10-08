@@ -99,27 +99,27 @@ def _get_model():
 _FACE_HEAD_ARCFACE_PATH = Path(__file__).resolve().parent.parent / "face_head_arcface.pt"
 _FACE_HEAD_TRIPLET_PATH = Path(__file__).resolve().parent.parent / "face_head.pt"
 _face_embedder: FaceEmbedder | None = None
-_face_threshold: float = 0.30
+_face_threshold: float = 0.95
 _face_model_name: str = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
 
 
 def _get_face_embedder() -> tuple[FaceEmbedder | None, float, str]:
     """Lazily loads the trained face projection head. Prioritizes the ArcFace head
-    (99.40% accuracy, threshold 0.30) if present, and falls back to the triplet
-    loss head (89.60% accuracy, threshold 0.55).
+    (99.40% accuracy, calibrated threshold 0.95) if present, and falls back to the triplet
+    loss head (89.60% accuracy, threshold 0.90).
     """
     global _face_embedder, _face_threshold, _face_model_name
     if not _TORCH_AVAILABLE:
-        return None, 0.30, "3D Anthropometric + ArcFace Metric Head (Offline Mode)"
+        return None, 0.95, "3D Anthropometric + ArcFace Metric Head (Offline Mode)"
     if _face_embedder is None:
         head = FaceProjectionHead()
         if _FACE_HEAD_ARCFACE_PATH.exists():
             head.load_state_dict(torch.load(_FACE_HEAD_ARCFACE_PATH, map_location="cpu"))
-            _face_threshold = 0.30
+            _face_threshold = 0.95
             _face_model_name = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
         elif _FACE_HEAD_TRIPLET_PATH.exists():
             head.load_state_dict(torch.load(_FACE_HEAD_TRIPLET_PATH, map_location="cpu"))
-            _face_threshold = 0.55
+            _face_threshold = 0.90
             _face_model_name = "DINOv2 ViT-B/14 + Triplet Head (LFW only, 89.6% accuracy)"
         else:
             raise HTTPException(
@@ -545,6 +545,8 @@ class FaceVerify3DResponse(BaseModel):
     data_sufficiency_warning: str | None = None
     aligned_crops_a: list[str] = []
     aligned_crops_b: list[str] = []
+    face_boxes_a: list[dict] = []
+    face_boxes_b: list[dict] = []
     model_info: str
 
 
@@ -699,6 +701,8 @@ async def verify_face_3d(
         data_sufficiency_warning=res["data_sufficiency_warning"],
         aligned_crops_a=crops_a_b64,
         aligned_crops_b=crops_b_b64,
+        face_boxes_a=res.get("face_boxes_a", []),
+        face_boxes_b=res.get("face_boxes_b", []),
         model_info=model_name,
     )
 

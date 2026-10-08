@@ -75,8 +75,78 @@ const CANONICAL_TRIANGLES = [
   [35, 53, 36], [38, 39, 54],
 ];
 
-// Facial perimeter contour indices
-const CONTOUR_INDICES = [0, 1, 6, 35, 53, 55, 51, 50, 52, 56, 54, 38, 7, 2, 0];
+// Detect face sub-region in source photo (isolating face from shoulders and background)
+function getFaceCropRect(img) {
+  if (!img || !img.width || !img.height) return null;
+  // If image is already a square aligned crop (e.g. 224x224), use full image
+  if (Math.abs(img.width - img.height) < 4 && img.width <= 300) {
+    return { sx: 0, sy: 0, sw: img.width, sh: img.height };
+  }
+
+  try {
+    const sw = 100;
+    const sh = Math.max(10, Math.round(100 * (img.height / img.width)));
+    const c = document.createElement("canvas");
+    c.width = sw;
+    c.height = sh;
+    const cx = c.getContext("2d", { willReadFrequently: true });
+    cx.drawImage(img, 0, 0, sw, sh);
+    const d = cx.getImageData(0, 0, sw, sh).data;
+
+    let sumX = 0, sumY = 0, count = 0;
+    let minX = sw, maxX = 0, minY = sh, maxY = 0;
+
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        const i = (y * sw + x) * 4;
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const yVal = 0.299 * r + 0.587 * g + 0.114 * b;
+        const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+        const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+
+        if (yVal > 30 && cb >= 75 && cb <= 130 && cr >= 130 && cr <= 178) {
+          sumX += x;
+          sumY += y;
+          count++;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (count > sw * sh * 0.03) {
+      const centerX = (sumX / count) / sw;
+      const centerY = (sumY / count) / sh;
+      const boxW = Math.max(0.20, ((maxX - minX) / sw) * 1.35);
+      const boxH = Math.max(0.24, ((maxY - minY) / sh) * 1.35);
+      const side = Math.max(boxW, boxH);
+
+      const pxX = Math.max(0, (centerX - side * 0.5) * img.width);
+      const pxY = Math.max(0, (centerY - side * 0.5) * img.height);
+      const pxSide = Math.min(side * img.width, Math.min(img.width - pxX, img.height - pxY));
+
+      return {
+        sx: pxX,
+        sy: pxY,
+        sw: pxSide,
+        sh: pxSide,
+      };
+    }
+  } catch (e) {
+    // Canvas context fallback
+  }
+
+  // Golden portrait center framing fallback
+  const side = Math.min(img.width, img.height) * 0.65;
+  return {
+    sx: Math.max(0, (img.width - side) / 2),
+    sy: Math.max(0, (img.height - side) * 0.35),
+    sw: side,
+    sh: side,
+  };
+}
 
 export default function FaceMesh3DViewer({
   modelData,
@@ -300,18 +370,27 @@ export default function FaceMesh3DViewer({
       const foreheadPt = transformed[0] || { x: w / 2, y: h * 0.2 };
       const faceHeight = Math.hypot(chinPt.x - foreheadPt.x, chinPt.y - foreheadPt.y) || h * 0.7;
 
-      const imgAspect = activeTexture.width / activeTexture.height;
-      const drawH = faceHeight * 1.55;
-      const drawW = drawH * imgAspect;
+      const crop = getFaceCropRect(activeTexture);
+      const sx = crop ? crop.sx : 0;
+      const sy = crop ? crop.sy : 0;
+      const sw = crop ? crop.sw : activeTexture.width;
+      const sh = crop ? crop.sh : activeTexture.height;
+
+      const drawH = faceHeight * 1.30;
+      const drawW = drawH * (sw / sh);
 
       // Parallax shift based on yaw & pitch
-      const shiftX = Math.sin(yaw) * (w * 0.14);
-      const shiftY = -Math.sin(pitch) * (h * 0.12);
+      const shiftX = Math.sin(yaw) * (w * 0.12);
+      const shiftY = -Math.sin(pitch) * (h * 0.10);
 
       ctx.drawImage(
         activeTexture,
+        sx,
+        sy,
+        sw,
+        sh,
         anchorPt.x - drawW / 2 + shiftX,
-        anchorPt.y - drawH * 0.46 + shiftY,
+        anchorPt.y - drawH * 0.44 + shiftY,
         drawW,
         drawH
       );
