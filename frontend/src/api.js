@@ -218,6 +218,17 @@ export async function fetchFaceModelInfo() {
   };
 }
 
+export async function extractFace(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await smartFetch(`/api/extract-face`, { method: "POST", body: form });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Face extraction failed: ${detail}`);
+  }
+  return res.json();
+}
+
 // ── Cross-Model Trust — DINOv2/DINOv1(/CLIP) agreement as a free uncertainty signal ──
 export async function runCrossModelMatch({ srcFile, trgFile, pixelX, pixelY, models = "dinov2,dino1" }) {
   const form = new FormData();

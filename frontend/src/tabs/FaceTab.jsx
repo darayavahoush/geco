@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Dropzone from "../components/Dropzone.jsx";
 import StatCard from "../components/StatCard.jsx";
 import FaceMesh3DViewer from "../components/FaceMesh3DViewer.jsx";
-import { runVerifyFace, runVerifyFace3D, fetchFaceSamples, fetchFaceModelInfo } from "../api";
+import { runVerifyFace, runVerifyFace3D, fetchFaceSamples, fetchFaceModelInfo, extractFace } from "../api";
 
 function dataURLtoFile(dataurl, filename) {
   const arr = dataurl.split(",");
@@ -150,11 +150,15 @@ export default function FaceTab() {
       });
     }
 
+    const frontPhoto = photosA.find((p) => p.angle === "front") || photosA[0];
+    const faceMetadata = frontPhoto?.face_metadata || null;
+
     return {
       completeness_score: Math.min(100, completeness),
       covered_angles: covered,
       missing_angles: missing,
       inconsistencies,
+      face_metadata: faceMetadata,
       more_info_prompt: {
         needs_more_info: missing.length > 0,
         headline: missing.length > 0 ? `${missing.length} Viewpoint${missing.length > 1 ? "s" : ""} Needed for Complete 3D Model` : "✓ 3D Model Fully Constrained",
@@ -202,11 +206,15 @@ export default function FaceTab() {
       });
     }
 
+    const frontPhoto = photosB.find((p) => p.angle === "front") || photosB[0];
+    const faceMetadata = frontPhoto?.face_metadata || null;
+
     return {
       completeness_score: Math.min(100, completeness),
       covered_angles: covered,
       missing_angles: missing,
       inconsistencies,
+      face_metadata: faceMetadata,
       more_info_prompt: {
         needs_more_info: missing.length > 0,
         headline: missing.length > 0 ? `${missing.length} Viewpoint${missing.length > 1 ? "s" : ""} Needed for Complete 3D Model` : "✓ 3D Model Fully Constrained",
@@ -228,14 +236,40 @@ export default function FaceTab() {
     const usedAngles = existing.map((p) => p.angle);
     const candidateAngle = angle || ANGLE_PRESETS.find((p) => !usedAngles.includes(p.id))?.id || "front";
 
-    const newItem = { file, previewUrl, angle: candidateAngle };
+    const newItem = { file, previewUrl, angle: candidateAngle, face_metadata: null };
     if (target === "A") {
-      setPhotosA([...photosA, newItem]);
+      setPhotosA((prev) => [...prev, newItem]);
     } else {
-      setPhotosB([...photosB, newItem]);
+      setPhotosB((prev) => [...prev, newItem]);
     }
     setResult(null);
     setSelectedSampleId(null);
+
+    // Auto extract face: isolates the person's face from room/ceiling/clothes
+    extractFace(file)
+      .then((res) => {
+        if (res && res.success && res.face_crop_base64) {
+          const meta = {
+            bbox: res.face_box,
+            landmarks: res.landmarks,
+            confidence: res.confidence,
+          };
+          const updater = (prev) =>
+            prev.map((item) =>
+              item.file === file
+                ? { ...item, previewUrl: res.face_crop_base64, face_metadata: meta }
+                : item
+            );
+          if (target === "A") {
+            setPhotosA(updater);
+          } else {
+            setPhotosB(updater);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn("Face auto-crop note:", err);
+      });
   }
 
   function handleRemovePhoto(target, index) {
@@ -808,7 +842,7 @@ export default function FaceTab() {
                   badge="Model A"
                   externalRotation={syncRotation ? sharedRotation : null}
                   onRotate={syncRotation ? setSharedRotation : null}
-                  mode="shaded"
+                  mode="photo"
                   deviations={result?.vertex_deviations}
                   height={340}
                 />
@@ -821,7 +855,7 @@ export default function FaceTab() {
                   badge="Model B"
                   externalRotation={syncRotation ? sharedRotation : null}
                   onRotate={syncRotation ? setSharedRotation : null}
-                  mode="shaded"
+                  mode="photo"
                   deviations={result?.vertex_deviations}
                   height={340}
                 />
@@ -1003,7 +1037,7 @@ export default function FaceTab() {
                     badge="Model A"
                     externalRotation={syncRotation ? sharedRotation : null}
                     onRotate={syncRotation ? setSharedRotation : null}
-                    mode="shaded"
+                    mode="photo"
                     deviations={result.vertex_deviations}
                     height={360}
                   />
@@ -1016,7 +1050,7 @@ export default function FaceTab() {
                     badge="Model B"
                     externalRotation={syncRotation ? sharedRotation : null}
                     onRotate={syncRotation ? setSharedRotation : null}
-                    mode="shaded"
+                    mode="photo"
                     deviations={result.vertex_deviations}
                     height={360}
                   />

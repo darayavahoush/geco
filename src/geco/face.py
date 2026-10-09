@@ -170,13 +170,14 @@ def verify_detailed(
 def build_anatomical_face_mesh(
     face_meta: dict | None = None,
     covered_angles: set[str] | list[str] | None = None,
-    grid_x: int = 19,
-    grid_y: int = 23,
+    n_rings: int = 12,
+    n_sectors: int = 36,
 ) -> tuple[list[list[float]], list[list[int]], list[float], list[dict[str, float]]]:
-    """Generates a smooth, high-density 3D anatomical human head/face mesh conforming
-    naturally to facial morphology (cranial curvature, protruding nose bridge/tip,
-    orbit depressions, brow ridge, philtrum, lips, pogonion chin, and smooth jawline).
-    Eliminates rigid hexagonal mask boundaries and origami profile crumpling.
+    """Generates a smooth, high-density 3D anatomical human head/face mesh using radial
+    concentric topology. Conforms naturally to facial morphology (cranial curvature,
+    protruding nose bridge/tip, orbit depressions, brow ridge, philtrum, lips, pogonion
+    chin, and smooth jawline). Eliminates jagged sawtooth borders, ninja-star edges, and
+    provides a full 3D skull volume for natural side/profile viewing.
     """
     import math
 
@@ -223,129 +224,161 @@ def build_anatomical_face_mesh(
         scale_jaw_w = max(0.80, min(1.25, aspect_ratio / 0.85))
         scale_face_h = max(0.85, min(1.20, 0.85 / max(0.5, aspect_ratio)))
 
-    xs = [round(-0.72 + (1.44 * i) / (grid_x - 1), 4) for i in range(grid_x)]
-    ys = [round(0.72 - (1.44 * j) / (grid_y - 1), 4) for j in range(grid_y)]
-
     vertices = []
     uvs = []
     confidences = []
-    grid_map = {}
+    ring_indices = []
 
-    for j, raw_y in enumerate(ys):
-        y = round(raw_y * scale_face_h, 4)
-        if y >= 0:
-            w = 0.65 * math.sqrt(max(0.01, 1.0 - ((y - 0.08) / 0.72) ** 2))
-        else:
-            w = 0.65 * scale_jaw_w * (1.0 - 0.38 * (-y / 0.74) ** 1.25)
+    # 1. Center apex vertex at pronasale / nose bridge (x=0, y=-0.06 + shift_nose_y, z=0.74 * scale_nose_z)
+    apex_y = round(-0.06 + shift_nose_y, 4)
+    apex_z = round(0.74 * scale_nose_z, 4)
+    vertices.append([0.0, apex_y, apex_z])
+    uvs.append({"u": 0.50, "v": 0.54})
+    confidences.append(0.96 if "front" in covered else 0.40)
+    center_idx = 0
 
-        for i, x in enumerate(xs):
-            if abs(x) <= w * 1.03:
-                norm_x = x / max(0.08, w)
-                z_base = 0.32 * (1.0 - 0.88 * norm_x ** 2) - 0.12 * (y / 0.74) ** 2
+    # 2. Concentric radial face rings (1 to n_rings)
+    for r_step in range(1, n_rings + 1):
+        t = r_step / n_rings  # normalized radius [0..1]
+        current_ring = []
+        for s in range(n_sectors):
+            angle = s * (2.0 * math.pi / n_sectors)
+            cos_a = math.cos(angle)
+            sin_a = math.sin(angle)
 
-                # 3D Nose pyramid
-                z_nose = 0.0
-                nose_y_min = -0.22 + shift_nose_y
-                nose_y_max = 0.26 + shift_nose_y
-                if nose_y_min <= y <= nose_y_max:
-                    lat = math.exp(-0.5 * (x / 0.12) ** 2)
-                    nose_tip_y = -0.08 + shift_nose_y
-                    if y >= nose_tip_y:
-                        prog = (nose_y_max - y) / max(0.01, nose_y_max - nose_tip_y)
-                        vert = 0.14 + 0.34 * prog
-                    else:
-                        prog = (y - nose_y_min) / max(0.01, nose_tip_y - nose_y_min)
-                        vert = 0.10 + 0.38 * prog
-                    z_nose = vert * lat * scale_nose_z
+            y_center = -0.06 + shift_nose_y * 0.5
+            y_span = (0.76 if sin_a >= 0 else 0.68) * scale_face_h
+            y = round(y_center + t * y_span * sin_a, 4)
 
-                # Orbit dips (eye sockets)
-                z_orbit = 0.0
-                eye_dist_x = abs(x) - 0.28 * scale_eye_w
-                eye_y = 0.18 + shift_eye_y
-                d_eye = math.sqrt(eye_dist_x ** 2 + ((y - eye_y) / 0.85) ** 2)
-                if d_eye < 0.14:
-                    z_orbit = -0.08 * (1.0 - (d_eye / 0.14) ** 2)
+            # Smooth mathematical face oval contour (zero sawtooth staircase steps)
+            if y >= 0:
+                w_max = 0.62 * math.sqrt(max(0.01, 1.0 - ((y - 0.05) / 0.80) ** 2))
+            else:
+                w_max = 0.62 * scale_jaw_w * (1.0 - 0.38 * (-y / 0.74) ** 1.25)
+            x = round(t * w_max * cos_a, 4)
 
-                # Brow ridge
-                brow_y = 0.31 + shift_eye_y
-                z_brow = 0.05 * math.exp(-0.5 * ((abs(x) - 0.25 * scale_eye_w) / 0.15) ** 2) * math.exp(-0.5 * ((y - brow_y) / 0.06) ** 2)
+            # Volumetric cranial skull depth
+            z_base = 0.30 * (1.0 - 0.90 * (x / max(0.08, w_max)) ** 2) - 0.12 * (y / 0.74) ** 2
+            z_taper = 1.0 - t ** 2.0 * 0.90
+            z = z_base * z_taper - 0.10 * t ** 2.5
 
-                # Lips
-                z_lips = 0.0
-                mouth_y_min = -0.42 + shift_mouth_y
-                mouth_y_max = -0.24 + shift_mouth_y
-                if mouth_y_min <= y <= mouth_y_max:
-                    lat_mouth = math.exp(-0.5 * (x / (0.20 * scale_mouth_w)) ** 2)
-                    profile = 0.12 * math.sin(((y - mouth_y_min) / (mouth_y_max - mouth_y_min)) * math.pi)
-                    stomion_y = -0.34 + shift_mouth_y
-                    if abs(y - stomion_y) < 0.03:
-                        profile -= 0.03
-                    z_lips = max(0.0, profile) * lat_mouth
-
-                # Chin
-                chin_y = -0.58
-                z_chin = 0.15 * math.exp(-0.5 * (x / 0.16) ** 2) * math.exp(-0.5 * ((y - chin_y) / 0.09) ** 2)
-
-                # Cheek fullness
-                z_cheek = 0.05 * math.exp(-0.5 * ((abs(x) - 0.35) / 0.14) ** 2) * math.exp(-0.5 * ((y - (-0.05)) / 0.12) ** 2)
-
-                z = z_base + z_nose + z_orbit + z_brow + z_lips + z_chin + z_cheek
-
-                # Multi-view confidence
-                if abs(x) <= 0.20:
-                    conf = 0.96 if "front" in covered else 0.40
-                    if "up" in covered and y < -0.3: conf = min(0.99, conf + 0.03)
-                    if "down" in covered and y > 0.3: conf = min(0.99, conf + 0.03)
-                elif x < -0.20:
-                    if "left" in covered:
-                        conf = 0.95
-                    elif "front" in covered:
-                        lat_factor = min(1.0, (abs(x) - 0.20) / 0.50)
-                        conf = 0.45 - 0.25 * lat_factor
-                        z *= (1.0 - 0.15 * lat_factor)
-                    else:
-                        conf = 0.15
+            # Sagittal facial features
+            # Nose
+            nose_ymin = -0.22 + shift_nose_y
+            nose_ymax = 0.24 + shift_nose_y
+            if nose_ymin <= y <= nose_ymax and abs(x) < 0.16:
+                lat_n = math.exp(-0.5 * (x / 0.10) ** 2)
+                nose_tip_y = -0.06 + shift_nose_y
+                if y >= nose_tip_y:
+                    vert_n = 0.14 + 0.36 * ((nose_ymax - y) / max(0.01, nose_ymax - nose_tip_y))
                 else:
-                    if "right" in covered:
-                        conf = 0.95
-                    elif "front" in covered:
-                        lat_factor = min(1.0, (x - 0.20) / 0.50)
-                        conf = 0.45 - 0.25 * lat_factor
-                        z *= (1.0 - 0.15 * lat_factor)
-                    else:
-                        conf = 0.15
+                    vert_n = 0.10 + 0.40 * ((y - nose_ymin) / max(0.01, nose_tip_y - nose_ymin))
+                z += vert_n * lat_n * scale_nose_z * (1.0 - min(1.0, t * 2.2))
 
-                if y > 0.40 and "down" not in covered: conf *= 0.88
-                if y < -0.45 and "up" not in covered: conf *= 0.85
+            # Orbits (eye sockets)
+            d_eye = math.sqrt((abs(x) - 0.28 * scale_eye_w) ** 2 + ((y - (0.18 + shift_eye_y)) / 0.85) ** 2)
+            if d_eye < 0.14:
+                z += -0.08 * (1.0 - (d_eye / 0.14) ** 2)
 
-                idx = len(vertices)
-                vertices.append([round(float(x), 4), round(float(y), 4), round(float(z), 4)])
-                confidences.append(round(min(1.0, max(0.1, conf)), 3))
+            # Brow ridge
+            brow_y = 0.31 + shift_eye_y
+            if 0.26 <= y <= 0.38:
+                z += 0.05 * math.exp(-0.5 * ((abs(x) - 0.25 * scale_eye_w) / 0.14) ** 2) * math.exp(-0.5 * ((y - brow_y) / 0.06) ** 2)
 
-                u = round(float(max(0.01, min(0.99, 0.50 + x * 0.58))), 4)
-                v = round(float(max(0.01, min(0.99, 0.50 - y * 0.54))), 4)
-                uvs.append({"u": u, "v": v})
+            # Lips
+            mouth_ymin = -0.42 + shift_mouth_y
+            mouth_ymax = -0.24 + shift_mouth_y
+            if mouth_ymin <= y <= mouth_ymax and abs(x) < 0.20:
+                lat_m = math.exp(-0.5 * (x / (0.15 * scale_mouth_w)) ** 2)
+                z_lip = 0.12 * math.sin(((y - mouth_ymin) / (mouth_ymax - mouth_ymin)) * math.pi) * lat_m
+                if abs(y - (-0.34 + shift_mouth_y)) < 0.03:
+                    z_lip -= 0.03
+                z += z_lip
 
-                grid_map[(i, j)] = idx
+            # Chin
+            if -0.68 <= y <= -0.48 and abs(x) < 0.18:
+                lat_c = math.exp(-0.5 * (x / 0.14) ** 2)
+                z += 0.16 * math.sin(((y - (-0.68)) / 0.20) * math.pi) * lat_c
 
+            # UV coordinates mapping directly to aligned face crop
+            u = max(0.01, min(0.99, 0.50 + x * 0.72))
+            v = max(0.01, min(0.99, 0.50 - y * 0.65))
+
+            # Multi-view confidence
+            if abs(x) <= 0.20:
+                conf = 0.96 if "front" in covered else 0.40
+                if "up" in covered and y < -0.3: conf = min(0.99, conf + 0.03)
+                if "down" in covered and y > 0.3: conf = min(0.99, conf + 0.03)
+            elif x < -0.20:
+                if "left" in covered:
+                    conf = 0.95
+                elif "front" in covered:
+                    lat_factor = min(1.0, (abs(x) - 0.20) / 0.45)
+                    conf = 0.45 - 0.25 * lat_factor
+                    z *= (1.0 - 0.12 * lat_factor)
+                else:
+                    conf = 0.15
+            else:
+                if "right" in covered:
+                    conf = 0.95
+                elif "front" in covered:
+                    lat_factor = min(1.0, (x - 0.20) / 0.45)
+                    conf = 0.45 - 0.25 * lat_factor
+                    z *= (1.0 - 0.12 * lat_factor)
+                else:
+                    conf = 0.15
+
+            if y > 0.40 and "down" not in covered: conf *= 0.88
+            if y < -0.45 and "up" not in covered: conf *= 0.85
+
+            idx = len(vertices)
+            vertices.append([round(x, 4), round(y, 4), round(z, 4)])
+            uvs.append({"u": round(u, 4), "v": round(v, 4)})
+            confidences.append(round(min(1.0, max(0.1, conf)), 3))
+            current_ring.append(idx)
+        ring_indices.append(current_ring)
+
+    # 3. Cranial back-of-head rings (rings 13 & 14 to provide solid skull volume for 360-degree rotation)
+    for c_step in range(1, 3):
+        current_ring = []
+        c_depth = round(-0.20 - c_step * 0.22, 4)
+        scale_c = 1.0 - c_step * 0.14
+        for s in range(n_sectors):
+            angle = s * (2.0 * math.pi / n_sectors)
+            cos_a = math.cos(angle)
+            sin_a = math.sin(angle)
+            y_center = -0.06
+            y_span = (0.76 if sin_a >= 0 else 0.68) * scale_face_h
+            y = round((y_center + y_span * sin_a) * scale_c, 4)
+            if y >= 0:
+                w_max = 0.62 * math.sqrt(max(0.01, 1.0 - ((y - 0.05) / 0.80) ** 2))
+            else:
+                w_max = 0.62 * scale_jaw_w * (1.0 - 0.38 * (-y / 0.74) ** 1.25)
+            x = round(w_max * cos_a * scale_c, 4)
+            z = c_depth
+
+            idx = len(vertices)
+            vertices.append([round(x, 4), round(y, 4), round(z, 4)])
+            uvs.append({"u": 0.50, "v": 0.50})
+            confidences.append(0.25)
+            current_ring.append(idx)
+        ring_indices.append(current_ring)
+
+    # Regular CCW triangle topology
     triangles = []
-    for j in range(grid_y - 1):
-        for i in range(grid_x - 1):
-            p00 = grid_map.get((i, j))
-            p10 = grid_map.get((i + 1, j))
-            p01 = grid_map.get((i, j + 1))
-            p11 = grid_map.get((i + 1, j + 1))
-            if p00 is not None and p10 is not None and p01 is not None and p11 is not None:
-                triangles.append([p00, p01, p10])
-                triangles.append([p10, p01, p11])
-            elif p00 is not None and p01 is not None and p10 is not None:
-                triangles.append([p00, p01, p10])
-            elif p10 is not None and p01 is not None and p11 is not None:
-                triangles.append([p10, p01, p11])
-            elif p00 is not None and p11 is not None and p10 is not None:
-                triangles.append([p00, p11, p10])
-            elif p00 is not None and p01 is not None and p11 is not None:
-                triangles.append([p00, p01, p11])
+    # Apex cap
+    for s in range(n_sectors):
+        s_next = (s + 1) % n_sectors
+        triangles.append([center_idx, ring_indices[0][s], ring_indices[0][s_next]])
+
+    # Concentric quad rings
+    for r in range(len(ring_indices) - 1):
+        r0 = ring_indices[r]
+        r1 = ring_indices[r + 1]
+        for s in range(n_sectors):
+            s_next = (s + 1) % n_sectors
+            triangles.append([r0[s], r1[s], r0[s_next]])
+            triangles.append([r0[s_next], r1[s], r1[s_next]])
 
     return vertices, triangles, confidences, uvs
 

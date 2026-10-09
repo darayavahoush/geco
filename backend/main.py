@@ -709,6 +709,37 @@ async def verify_face_3d(
     )
 
 
+class ExtractFaceResponse(BaseModel):
+    success: bool
+    face_crop_base64: str | None = None
+    face_box: list[int] | None = None
+    landmarks: dict[str, list[float]] | None = None
+    confidence: float = 0.0
+
+
+@app.post("/api/extract-face", response_model=ExtractFaceResponse)
+async def extract_face(file: UploadFile = File(...)):
+    """Extracts a tight, eye-aligned face crop, discarding background walls, ceilings, and clothing."""
+    try:
+        contents = await file.read()
+        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
+        from geco.face_align import extract_face_bbox_and_crop
+        crop, meta = extract_face_bbox_and_crop(pil_img)
+        crop_b64 = _image_to_base64_jpeg(crop)
+        landmarks_dict = None
+        if meta and "landmarks" in meta:
+            landmarks_dict = {k: [round(float(v[0]), 2), round(float(v[1]), 2)] for k, v in meta["landmarks"].items()}
+        return ExtractFaceResponse(
+            success=True,
+            face_crop_base64=crop_b64,
+            face_box=list(meta.get("bbox", [])) if meta else None,
+            landmarks=landmarks_dict,
+            confidence=float(meta.get("confidence", 0.95)) if meta else 0.5,
+        )
+    except Exception:
+        return ExtractFaceResponse(success=False)
+
+
 _cached_face_samples: list[FaceSampleItem] | None = None
 
 
