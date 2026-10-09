@@ -3,10 +3,17 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 /**
  * Builds a continuous, high-density 3D anatomical human head/face mesh.
  * Adapts to detected facial landmarks (pupil distance, nose protrusion, jaw width)
- * and conforms to natural human facial curves (forehead slope, nose bridge/tip,
- * eye socket dips, lips, and chin) without hard-edged mask boundaries or origami folds.
+ * and conforms to natural human facial curves:
+ * - High cranial vault and forehead slope
+ * - Superciliary brow ridge
+ * - Deep orbital eye sockets
+ * - High zygomatic cheekbones
+ * - 3D sculpted nose (dorsum, pronasale tip lobule, alar wings / nostril flares)
+ * - Philtrum and Cupid's bow upper lip, full lower lip
+ * - Mentolabial crease dip and mandibular chin dome (pogonion)
+ * - Analytical smooth outward-facing surface normals for hardware Phong shading
  */
-export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front"], nTheta = 28, nPhi = 36) {
+export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front"], nTheta = 40, nPhi = 48) {
   const covered = new Set(coveredAngles || ["front"]);
 
   let scaleEyeW = 1.0;
@@ -46,11 +53,15 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
     scaleMouthW = Math.max(0.85, Math.min(1.20, (mouthWPx / Math.max(1.0, bw)) / 0.38));
 
     const aspect = bw / Math.max(1.0, bh);
-    scaleJawW = Math.max(0.85, Math.min(1.15, aspect / 0.85));
-    scaleFaceH = Math.max(0.90, Math.min(1.15, 0.85 / Math.max(0.5, aspect)));
+    scaleJawW = Math.max(0.85, minVal(1.15, aspect / 0.85));
+    scaleFaceH = Math.max(0.90, minVal(1.15, 0.85 / Math.max(0.5, aspect)));
   }
 
-  // Grid of latitudes theta (from 0.08 at top crown to 0.92*pi at chin/submental neck)
+  function minVal(a, b) {
+    return Math.min(a, b);
+  }
+
+  // Grid of latitudes theta (from 0.08 at top crown to 0.92*pi at chin/neck)
   const thetas = [];
   for (let j = 0; j < nTheta; j++) {
     thetas.push(0.08 + (Math.PI * 0.84 * j) / (nTheta - 1));
@@ -61,24 +72,31 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
     phis.push(-Math.PI + (2.0 * Math.PI * i) / nPhi);
   }
 
-  const vertices = [];
-  const uvs = [];
-  const confidences = [];
-  const isCranial = [];
+  const grid = [];
+  const uvsGrid = [];
+  const confGrid = [];
+  const isCranialGrid = [];
 
   for (let j = 0; j < nTheta; j++) {
+    const row = [];
+    const uvRow = [];
+    const confRow = [];
+    const cranialRow = [];
+
     const t = thetas[j];
     const rawY = Math.cos(t) * 0.70;
     const y = Math.round(rawY * scaleFaceH * 10000) / 10000;
 
-    let rx, rzBack;
+    let rx, rzFront, rzBack;
     if (y >= 0) {
       const shape = Math.sqrt(Math.max(0.04, 1.0 - Math.pow(y / 0.76, 2)));
       rx = 0.46 * shape;
+      rzFront = 0.30 * shape;
       rzBack = 0.44 * shape;
     } else {
       const prog = -y / 0.68;
       rx = 0.46 * (1.0 - 0.28 * Math.pow(prog, 1.1)) * scaleJawW;
+      rzFront = 0.30 * (1.0 - 0.22 * prog);
       rzBack = 0.44 * (1.0 - 0.40 * prog);
     }
 
@@ -91,51 +109,75 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
       let z;
 
       if (cosP >= 0) {
-        // Frontal & lateral facial geometry with rich anatomical relief
-        const zBase = 0.16 * cosP;
+        // Anterior facial geometry with rich anatomical relief
+        const zBase = rzFront * Math.pow(cosP, 0.85);
 
-        // 1. Nose structure: prominent nasal dorsum, bridge & pronasale tip
+        // Forehead gentle slope
+        let zForehead = 0.0;
+        if (y > 0.28) {
+          zForehead = 0.02 * Math.sin(((y - 0.28) / 0.42) * Math.PI) * Math.pow(cosP, 1.2);
+        }
+
+        // 1. Brow ridge (superciliary arches)
+        let zBrow = 0.0;
+        const browY = 0.26 + shiftEyeY;
+        if (Math.abs(y - browY) < 0.07 && Math.abs(p) < 0.50) {
+          zBrow = 0.038 * Math.exp(-0.5 * Math.pow(p / 0.35, 2)) * (1.0 - Math.abs(y - browY) / 0.07);
+        }
+
+        // 2. Eye sockets (deep orbital cavities)
+        let zOrbit = 0.0;
+        const eyeY = 0.14 + shiftEyeY;
+        const eyeDist = Math.sqrt(
+          Math.pow((Math.abs(p) - 0.35 * scaleEyeW) / 0.20, 2) + Math.pow((y - eyeY) / 0.12, 2)
+        );
+        if (eyeDist < 1.0) {
+          zOrbit = -0.055 * (1.0 - eyeDist * eyeDist);
+        }
+
+        // 3. Cheekbones (zygomatic arches)
+        let zCheek = 0.0;
+        const cheekY = 0.06 + shiftEyeY;
+        const cheekDist = Math.sqrt(
+          Math.pow((Math.abs(p) - 0.42) / 0.14, 2) + Math.pow((y - cheekY) / 0.12, 2)
+        );
+        if (cheekDist < 1.0) {
+          zCheek = 0.048 * (1.0 - cheekDist * cheekDist);
+        }
+
+        // 4. 3D Sculpted Nose: dorsum bridge, pronasale tip, and alar wings
         let zNose = 0.0;
         const noseYMin = -0.16 + shiftNoseY;
-        const noseYMax = 0.20 + shiftNoseY;
+        const noseYMax = 0.22 + shiftNoseY;
         if (y >= noseYMin && y <= noseYMax) {
-          const latN = Math.exp(-0.5 * Math.pow(p / 0.13, 2));
+          const latN = Math.exp(-0.5 * Math.pow(p / 0.11, 2));
           const noseTipY = -0.06 + shiftNoseY;
           let vertN = 0.0;
           if (y >= noseTipY) {
             const progN = (noseYMax - y) / Math.max(0.01, noseYMax - noseTipY);
-            vertN = 0.04 + 0.14 * progN;
+            vertN = 0.03 + 0.19 * Math.pow(progN, 0.9);
           } else {
             const progN = (y - noseYMin) / Math.max(0.01, noseTipY - noseYMin);
-            vertN = 0.04 + 0.14 * progN;
+            vertN = 0.03 + 0.19 * Math.pow(progN, 1.1);
           }
-          zNose = vertN * latN * Math.min(1.25, Math.max(0.80, scaleNoseZ));
+          const zBridge = vertN * latN * Math.min(1.25, Math.max(0.80, scaleNoseZ));
+
+          // Alar wings (nostril flares)
+          let zAlar = 0.0;
+          const alarY = -0.08 + shiftNoseY;
+          if (y >= -0.15 && y <= -0.02 && Math.abs(p) >= 0.08 && Math.abs(p) <= 0.24) {
+            const alarDist = Math.sqrt(
+              Math.pow((Math.abs(p) - 0.15) / 0.07, 2) + Math.pow((y - alarY) / 0.05, 2)
+            );
+            if (alarDist < 1.0) {
+              zAlar = 0.035 * (1.0 - alarDist * alarDist);
+            }
+          }
+
+          zNose = zBridge + zAlar;
         }
 
-        // 2. Eye sockets (recessed orbital depths)
-        let zOrbit = 0.0;
-        const eyeY = 0.14 + shiftEyeY;
-        const eyeDist = Math.sqrt(Math.pow((Math.abs(p) - 0.35 * scaleEyeW) / 0.20, 2) + Math.pow((y - eyeY) / 0.12, 2));
-        if (eyeDist < 1.0) {
-          zOrbit = -0.040 * (1.0 - eyeDist * eyeDist);
-        }
-
-        // 3. Brow ridge (superciliary arches)
-        let zBrow = 0.0;
-        const browY = 0.26 + shiftEyeY;
-        if (Math.abs(y - browY) < 0.07 && Math.abs(p) < 0.50) {
-          zBrow = 0.035 * Math.exp(-0.5 * Math.pow(p / 0.35, 2)) * (1.0 - Math.abs(y - browY) / 0.07);
-        }
-
-        // 4. Cheekbones (zygomatic arches)
-        let zCheek = 0.0;
-        const cheekY = 0.06 + shiftEyeY;
-        const cheekDist = Math.sqrt(Math.pow((Math.abs(p) - 0.42) / 0.14, 2) + Math.pow((y - cheekY) / 0.12, 2));
-        if (cheekDist < 1.0) {
-          zCheek = 0.040 * (1.0 - cheekDist * cheekDist);
-        }
-
-        // 5. Lips (upper and lower lip projection)
+        // 5. Lips & Philtrum (Cupid's bow upper lip & full lower lip)
         let zLips = 0.0;
         const mouthYMin = -0.36 + shiftMouthY;
         const mouthYMax = -0.18 + shiftMouthY;
@@ -143,45 +185,45 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
           const latM = Math.exp(-0.5 * Math.pow(p / (0.18 * scaleMouthW), 2));
           const fissureY = -0.27 + shiftMouthY;
           if (y >= fissureY) {
-            zLips = 0.038 * Math.sin(((y - fissureY) / Math.max(0.01, mouthYMax - fissureY)) * Math.PI) * latM;
+            const cupid = 1.0 - 0.15 * Math.exp(-0.5 * Math.pow(p / 0.05, 2));
+            zLips = 0.042 * Math.sin(((y - fissureY) / Math.max(0.01, mouthYMax - fissureY)) * Math.PI) * latM * cupid;
           } else {
-            zLips = 0.042 * Math.sin(((y - mouthYMin) / Math.max(0.01, fissureY - mouthYMin)) * Math.PI) * latM;
+            zLips = 0.048 * Math.sin(((y - mouthYMin) / Math.max(0.01, fissureY - mouthYMin)) * Math.PI) * latM;
           }
         }
 
-        // 6. Mentolabial crease dip (groove under lower lip)
+        // 6. Mentolabial crease dip
         let zCrease = 0.0;
         const creaseY = -0.40 + shiftMouthY;
         if (Math.abs(y - creaseY) < 0.05 && Math.abs(p) < 0.24) {
-          zCrease = -0.025 * Math.exp(-0.5 * Math.pow(p / 0.18, 2)) * (1.0 - Math.abs(y - creaseY) / 0.05);
+          zCrease = -0.030 * Math.exp(-0.5 * Math.pow(p / 0.18, 2)) * (1.0 - Math.abs(y - creaseY) / 0.05);
         }
 
-        // 7. Chin (pogonion projection)
+        // 7. Chin dome (pogonion projection)
         let zChin = 0.0;
         const chinYMin = -0.58;
         const chinYMax = -0.42;
         if (y >= chinYMin && y <= chinYMax && Math.abs(p) < 0.24) {
           const latC = Math.exp(-0.5 * Math.pow(p / 0.16, 2));
-          zChin = 0.060 * Math.sin(((y - chinYMin) / 0.16) * Math.PI) * latC;
+          zChin = 0.070 * Math.sin(((y - chinYMin) / 0.16) * Math.PI) * latC;
         }
 
-        z = Math.round((zBase + zNose + zOrbit + zBrow + zCheek + zLips + zCrease + zChin) * 10000) / 10000;
-        isCranial.push(false);
+        z = Math.round((zBase + zForehead + zBrow + zOrbit + zCheek + zNose + zLips + zCrease + zChin) * 10000) / 10000;
+        cranialRow.push(false);
 
-        // UV mapping
-        let u = 0.50 + 0.44 * p;
-        let v = 0.55 - 0.72 * y;
+        let u = 0.50 + 0.46 * sinP;
+        let v = 0.54 - 0.70 * y;
         u = Math.max(0.01, Math.min(0.99, u));
         v = Math.max(0.01, Math.min(0.99, v));
-        uvs.push({ u: Math.round(u * 10000) / 10000, v: Math.round(v * 10000) / 10000 });
+        uvRow.push({ u: Math.round(u * 10000) / 10000, v: Math.round(v * 10000) / 10000 });
       } else {
         // Posterior cranium (smooth occipital dome)
         z = -Math.round((rzBack * Math.pow(Math.abs(cosP), 0.85)) * 10000) / 10000;
-        isCranial.push(true);
-        uvs.push({ u: 0.5, v: 0.5 });
+        cranialRow.push(true);
+        uvRow.push({ u: 0.5, v: 0.5 });
       }
 
-      vertices.push([x, y, z]);
+      row.push([x, y, z]);
 
       let conf = 0.95;
       if (!covered.has("front")) conf = 0.40;
@@ -189,12 +231,64 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
         const sideCovered = (covered.has("left") && p < 0) || (covered.has("right") && p > 0);
         conf = sideCovered ? 0.95 : 0.45;
       }
-      confidences.push(Math.round(conf * 100) / 100);
+      confRow.push(Math.round(conf * 100) / 100);
+    }
+
+    grid.push(row);
+    uvsGrid.push(uvRow);
+    confGrid.push(confRow);
+    isCranialGrid.push(cranialRow);
+  }
+
+  // Flatten vertices and compute smooth unit normals
+  const vertices = [];
+  const uvs = [];
+  const confidences = [];
+  const isCranial = [];
+  const normals = [];
+
+  for (let j = 0; j < nTheta; j++) {
+    const jPrev = Math.max(0, j - 1);
+    const jNext = Math.min(nTheta - 1, j + 1);
+    for (let i = 0; i < nPhi; i++) {
+      const iPrev = (i - 1 + nPhi) % nPhi;
+      const iNext = (i + 1) % nPhi;
+
+      const v = grid[j][i];
+      vertices.push(v);
+      uvs.push(uvsGrid[j][i]);
+      confidences.push(confGrid[j][i]);
+      isCranial.push(isCranialGrid[j][i]);
+
+      // Tangent theta (downwards)
+      const tTheta = [
+        grid[jNext][i][0] - grid[jPrev][i][0],
+        grid[jNext][i][1] - grid[jPrev][i][1],
+        grid[jNext][i][2] - grid[jPrev][i][2],
+      ];
+      // Tangent phi (counter-clockwise / rightwards)
+      const tPhi = [
+        grid[j][iNext][0] - grid[j][iPrev][0],
+        grid[j][iNext][1] - grid[j][iPrev][1],
+        grid[j][iNext][2] - grid[j][iPrev][2],
+      ];
+
+      // Normal = tTheta x tPhi (points outwards)
+      const nx = tTheta[1] * tPhi[2] - tTheta[2] * tPhi[1];
+      const ny = tTheta[2] * tPhi[0] - tTheta[0] * tPhi[2];
+      const nz = tTheta[0] * tPhi[1] - tTheta[1] * tPhi[0];
+      const nLen = Math.hypot(nx, ny, nz) || 1.0;
+      normals.push([
+        Math.round((nx / nLen) * 10000) / 10000,
+        Math.round((ny / nLen) * 10000) / 10000,
+        Math.round((nz / nLen) * 10000) / 10000,
+      ]);
     }
   }
 
   // Regular CCW quad-split triangles
   const triangles = [];
+  const wireframeIndices = [];
   for (let j = 0; j < nTheta - 1; j++) {
     for (let i = 0; i < nPhi; i++) {
       const iNext = (i + 1) % nPhi;
@@ -205,17 +299,19 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
 
       triangles.push([v00, v01, v10]);
       triangles.push([v10, v01, v11]);
+
+      wireframeIndices.push(v00, v01, v01, v10, v10, v00);
+      wireframeIndices.push(v10, v01, v01, v11, v11, v10);
     }
   }
 
-  return { vertices, triangles, uvs, confidences, isCranial };
+  return { vertices, triangles, uvs, confidences, isCranial, normals, wireframeIndices };
 }
 
-// Detect face sub-region in source photo (isolating face from shoulders and background)
+// Isolates face sub-rectangle in source photo
 function getFaceCropRect(img, faceMeta) {
   if (!img || !img.width || !img.height) return null;
   const aspect = img.width / img.height;
-  // If the image is already a tight face crop (e.g., from YuNet extraction or square crop), use it directly
   if (aspect >= 0.92 && aspect <= 1.08 && img.width <= 320) {
     return { sx: 0, sy: 0, sw: img.width, sh: img.height };
   }
@@ -238,60 +334,7 @@ function getFaceCropRect(img, faceMeta) {
   return { sx, sy, sw: side, sh: side };
 }
 
-// Affine triangle texture mapping onto canvas 2D path
-function drawTexturedTriangle(ctx, img, p0, p1, p2, uv0, uv1, uv2, intensity, crop) {
-  const x0 = p0.x, y0 = p0.y;
-  const x1 = p1.x, y1 = p1.y;
-  const x2 = p2.x, y2 = p2.y;
-
-  const sx = crop ? crop.sx : 0;
-  const sy = crop ? crop.sy : 0;
-  const sw = crop ? crop.sw : img.width;
-  const sh = crop ? crop.sh : img.height;
-
-  const u0 = sx + uv0.u * sw;
-  const v0 = sy + uv0.v * sh;
-  const u1 = sx + uv1.u * sw;
-  const v1 = sy + uv1.v * sh;
-  const u2 = sx + uv2.u * sw;
-  const v2 = sy + uv2.v * sh;
-
-  const denom = u0 * (v1 - v2) + u1 * (v2 - v0) + u2 * (v0 - v1);
-  if (Math.abs(denom) < 1e-4) return;
-
-  const a = (x0 * (v1 - v2) + x1 * (v2 - v0) + x2 * (v0 - v1)) / denom;
-  const b = (y0 * (v1 - v2) + y1 * (v2 - v0) + y2 * (v0 - v1)) / denom;
-  const c = (x0 * (u2 - u1) + x1 * (u0 - u2) + x2 * (u1 - u0)) / denom;
-  const d = (y0 * (u2 - u1) + y1 * (u0 - u2) + y2 * (u1 - u0)) / denom;
-  const e = (x0 * (u1 * v2 - u2 * v1) + x1 * (u2 * v0 - u0 * v2) + x2 * (u0 * v1 - u1 * v0)) / denom;
-  const f = (y0 * (u1 * v2 - u2 * v1) + y1 * (u2 * v0 - u0 * v2) + y2 * (u0 * v1 - u1 * v0)) / denom;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(x0, y0);
-  ctx.lineTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.closePath();
-  ctx.clip();
-
-  ctx.transform(a, b, c, d, e, f);
-  ctx.drawImage(img, 0, 0);
-
-  // Apply subtle 3D directional lighting/depth shadow
-  if (intensity !== undefined && intensity < 0.98) {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(0, 0, 0, ${Math.max(0, 1.0 - intensity) * 0.40})`;
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-// Samples real hair and skin tone from subject's photo for seamless 360-degree anatomical shading
+// Samples real hair and skin tone from photo for seamless shading
 function extractFacePalette(img) {
   if (!img || !img.width || !img.height) {
     return { hair: [38, 34, 32], skin: [215, 172, 145] };
@@ -302,7 +345,6 @@ function extractFacePalette(img) {
     canvas.height = 64;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0, 64, 64);
-    // Hair sample near top center (x=32, y=5)
     const hairData = ctx.getImageData(30, 4, 5, 5).data;
     let hr = 0, hg = 0, hb = 0;
     for (let i = 0; i < hairData.length; i += 4) {
@@ -313,7 +355,6 @@ function extractFacePalette(img) {
     const hCount = hairData.length / 4;
     const hair = [Math.round(hr / hCount), Math.round(hg / hCount), Math.round(hb / hCount)];
 
-    // Skin sample near cheek (x=24, y=36)
     const skinData = ctx.getImageData(22, 34, 5, 5).data;
     let sr = 0, sg = 0, sb = 0;
     for (let i = 0; i < skinData.length; i += 4) {
@@ -327,6 +368,213 @@ function extractFacePalette(img) {
   } catch {
     return { hair: [38, 34, 32], skin: [215, 172, 145] };
   }
+}
+
+// ── WebGL Shaders & Matrix Math ──────────────────────────────────────────
+
+const VS_SOURCE = `
+  attribute vec3 aPosition;
+  attribute vec3 aNormal;
+  attribute vec2 aUv;
+  attribute vec4 aColor;
+  attribute float aIsCranial;
+
+  uniform mat4 uModelView;
+  uniform mat4 uProjection;
+  uniform mat3 uNormalMatrix;
+
+  varying vec3 vNormal;
+  varying vec3 vPosition;
+  varying vec2 vUv;
+  varying vec4 vColor;
+  varying float vIsCranial;
+
+  void main() {
+    vec4 mvPos = uModelView * vec4(aPosition, 1.0);
+    vPosition = mvPos.xyz;
+    vNormal = normalize(uNormalMatrix * aNormal);
+    vUv = aUv;
+    vColor = aColor;
+    vIsCranial = aIsCranial;
+    gl_Position = uProjection * mvPos;
+  }
+`;
+
+const FS_SOURCE = `
+  precision mediump float;
+
+  varying vec3 vNormal;
+  varying vec3 vPosition;
+  varying vec2 vUv;
+  varying vec4 vColor;
+  varying float vIsCranial;
+
+  uniform int uRenderMode; // 0=photo, 1=surface/shaded, 2=wireframe base, 3=confidence, 4=comparison, 5=wireframe lines
+  uniform sampler2D uTexture;
+  uniform float uHasTexture;
+  uniform vec3 uSkinColor;
+  uniform vec3 uHairColor;
+  uniform vec3 uLightDir1;
+  uniform vec3 uLightDir2;
+  uniform vec3 uLightDir3;
+
+  void main() {
+    if (uRenderMode == 5) {
+      // Wireframe overlay lines
+      gl_FragColor = vec4(0.22, 0.74, 0.98, 0.85);
+      return;
+    }
+
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(-vPosition);
+
+    // Three-point studio lighting (Key, Fill, Rim)
+    // 1. Key light (warm, directional)
+    float diff1 = max(0.0, dot(N, uLightDir1));
+    vec3 H1 = normalize(uLightDir1 + V);
+    float spec1 = pow(max(0.0, dot(N, H1)), 28.0) * 0.40;
+
+    // 2. Fill light (soft ambient from side)
+    float diff2 = max(0.0, dot(N, uLightDir2)) * 0.35;
+
+    // 3. Rim backlight (profile separation)
+    float rim = pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 3.0) * 0.35;
+
+    float ambient = 0.28;
+    float totalDiffuse = ambient + diff1 * 0.62 + diff2;
+
+    vec3 baseColor = uSkinColor;
+
+    if (vIsCranial > 0.5) {
+      baseColor = uHairColor;
+      vec3 finalColor = baseColor * totalDiffuse + vec3(1.0) * spec1 * 0.15;
+      gl_FragColor = vec4(finalColor, 1.0);
+      return;
+    }
+
+    if (uRenderMode == 0) { // Photo 3D
+      if (uHasTexture > 0.5) {
+        vec4 texColor = texture2D(uTexture, vUv);
+        // Smooth skin blend at lateral cranial edge
+        float edgeDist = clamp(abs(vUv.x - 0.5) * 2.0, 0.0, 1.0);
+        float blend = smoothstep(0.72, 0.98, edgeDist);
+        baseColor = mix(texColor.rgb, uSkinColor, blend);
+      } else {
+        baseColor = uSkinColor;
+      }
+      vec3 finalColor = baseColor * totalDiffuse + vec3(1.0, 0.95, 0.90) * spec1 + vec3(0.5, 0.7, 1.0) * rim * 0.4;
+      gl_FragColor = vec4(finalColor, 1.0);
+    } else if (uRenderMode == 1) { // Surface / Sculpted 3D (warm alabaster / digital clay)
+      vec3 clayColor = vec3(0.88, 0.83, 0.78);
+      vec3 finalColor = clayColor * totalDiffuse + vec3(1.0, 0.98, 0.94) * spec1 * 0.75 + vec3(0.4, 0.6, 0.85) * rim;
+      gl_FragColor = vec4(finalColor, 1.0);
+    } else if (uRenderMode == 2) { // Wireframe shaded base
+      vec3 darkBase = vec3(0.08, 0.12, 0.18) * totalDiffuse;
+      gl_FragColor = vec4(darkBase, 0.95);
+    } else { // Confidence or Comparison Heatmap
+      vec3 heatColor = vColor.rgb;
+      vec3 finalColor = heatColor * totalDiffuse + vec3(1.0) * spec1 * 0.25;
+      gl_FragColor = vec4(finalColor, 1.0);
+    }
+  }
+`;
+
+function mat4Perspective(fovY, aspect, near, far) {
+  const f = 1.0 / Math.tan(fovY / 2);
+  const nf = 1.0 / (near - far);
+  return [
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, (2 * far * near) * nf, 0,
+  ];
+}
+
+function mat4ModelView(yaw, pitch, distance, targetY = 0) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+
+  return [
+    cy, sp * sy, cp * sy, 0,
+    0, cp, -sp, 0,
+    -sy, -sp * cy, cp * cy, 0,
+    0, targetY, -distance, 1,
+  ];
+}
+
+function mat3FromMat4(m) {
+  return [
+    m[0], m[1], m[2],
+    m[4], m[5], m[6],
+    m[8], m[9], m[10],
+  ];
+}
+
+function initWebGL(canvas) {
+  const gl = canvas.getContext("webgl", { antialias: true, alpha: true }) ||
+             canvas.getContext("experimental-webgl", { antialias: true, alpha: true });
+  if (!gl) return null;
+
+  function createShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+      gl.deleteShader(s);
+      return null;
+    }
+    return s;
+  }
+
+  const vs = createShader(gl.VERTEX_SHADER, VS_SOURCE);
+  const fs = createShader(gl.FRAGMENT_SHADER, FS_SOURCE);
+  if (!vs || !fs) return null;
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+    return null;
+  }
+
+  const posBuf = gl.createBuffer();
+  const normBuf = gl.createBuffer();
+  const uvBuf = gl.createBuffer();
+  const colBuf = gl.createBuffer();
+  const cranialBuf = gl.createBuffer();
+  const triBuf = gl.createBuffer();
+  const lineBuf = gl.createBuffer();
+  const texture = gl.createTexture();
+
+  return {
+    gl,
+    prog,
+    buffers: { posBuf, normBuf, uvBuf, colBuf, cranialBuf, triBuf, lineBuf },
+    texture,
+    attribs: {
+      aPosition: gl.getAttribLocation(prog, "aPosition"),
+      aNormal: gl.getAttribLocation(prog, "aNormal"),
+      aUv: gl.getAttribLocation(prog, "aUv"),
+      aColor: gl.getAttribLocation(prog, "aColor"),
+      aIsCranial: gl.getAttribLocation(prog, "aIsCranial"),
+    },
+    uniforms: {
+      uModelView: gl.getUniformLocation(prog, "uModelView"),
+      uProjection: gl.getUniformLocation(prog, "uProjection"),
+      uNormalMatrix: gl.getUniformLocation(prog, "uNormalMatrix"),
+      uRenderMode: gl.getUniformLocation(prog, "uRenderMode"),
+      uTexture: gl.getUniformLocation(prog, "uTexture"),
+      uHasTexture: gl.getUniformLocation(prog, "uHasTexture"),
+      uSkinColor: gl.getUniformLocation(prog, "uSkinColor"),
+      uHairColor: gl.getUniformLocation(prog, "uHairColor"),
+      uLightDir1: gl.getUniformLocation(prog, "uLightDir1"),
+      uLightDir2: gl.getUniformLocation(prog, "uLightDir2"),
+      uLightDir3: gl.getUniformLocation(prog, "uLightDir3"),
+    },
+  };
 }
 
 export default function FaceMesh3DViewer({
@@ -346,6 +594,8 @@ export default function FaceMesh3DViewer({
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const glStateRef = useRef(null);
+
   const [internalYaw, setInternalYaw] = useState(0);
   const [internalPitch, setInternalPitch] = useState(0);
   const [zoom, setZoom] = useState(1.0);
@@ -367,7 +617,6 @@ export default function FaceMesh3DViewer({
   const lastMousePosRef = useRef({ x: 0, y: 0 });
   const animFrameRef = useRef(null);
 
-  // Sync external rotation if provided
   const yaw = externalRotation ? externalRotation.yaw : internalYaw;
   const pitch = externalRotation ? externalRotation.pitch : internalPitch;
 
@@ -375,7 +624,7 @@ export default function FaceMesh3DViewer({
     setRenderMode(mode);
   }, [mode]);
 
-  // Load photos into HTML Image objects for true-to-life 3D face texturing
+  // Load photos into HTML Image objects
   useEffect(() => {
     const urlsToLoad = {};
     if (photos && photos.length > 0) {
@@ -391,9 +640,7 @@ export default function FaceMesh3DViewer({
       urlsToLoad.front = photoUrl;
     }
 
-    const loaded = { front: null, left: null, right: null };
     let active = true;
-
     Object.entries(urlsToLoad).forEach(([key, url]) => {
       if (!url) return;
       const img = new Image();
@@ -410,7 +657,7 @@ export default function FaceMesh3DViewer({
     };
   }, [photoUrl, photos]);
 
-  // Non-passive wheel event listener to fix "Unable to preventDefault inside passive event listener"
+  // Non-passive wheel event listener
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -445,19 +692,54 @@ export default function FaceMesh3DViewer({
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [autoRotate, yaw, pitch, onRotate]);
 
-  // Resolve continuous 3D anatomical face mesh
+  // Resolve continuous 3D anatomical face mesh (1,920 vertices)
   const mesh = useMemo(() => {
-    if (modelData?.vertices && modelData.vertices.length >= 700 && modelData?.triangles) {
+    if (modelData?.vertices && modelData.vertices.length >= 1900 && modelData?.triangles) {
       const uvs = (modelData.uvs && modelData.uvs.length === modelData.vertices.length)
         ? modelData.uvs
         : modelData.vertices.map(([x, y]) => ({
             u: Math.max(0.01, Math.min(0.99, 0.50 + x * 0.58)),
             v: Math.max(0.01, Math.min(0.99, 0.55 - 0.75 * y)),
           }));
+
+      let normals = modelData.normals;
+      if (!normals || normals.length !== modelData.vertices.length) {
+        // Fallback normal calculation if not provided by backend
+        const nTheta = 40, nPhi = 48;
+        normals = [];
+        for (let j = 0; j < nTheta; j++) {
+          const jPrev = Math.max(0, j - 1);
+          const jNext = Math.min(nTheta - 1, j + 1);
+          for (let i = 0; i < nPhi; i++) {
+            const iPrev = (i - 1 + nPhi) % nPhi;
+            const iNext = (i + 1) % nPhi;
+            const v0 = modelData.vertices[jNext * nPhi + i];
+            const v1 = modelData.vertices[jPrev * nPhi + i];
+            const v2 = modelData.vertices[j * nPhi + iNext];
+            const v3 = modelData.vertices[j * nPhi + iPrev];
+            const tTheta = [v0[0] - v1[0], v0[1] - v1[1], v0[2] - v1[2]];
+            const tPhi = [v2[0] - v3[0], v2[1] - v3[1], v2[2] - v3[2]];
+            const nx = tTheta[1] * tPhi[2] - tTheta[2] * tPhi[1];
+            const ny = tTheta[2] * tPhi[0] - tTheta[0] * tPhi[2];
+            const nz = tTheta[0] * tPhi[1] - tTheta[1] * tPhi[0];
+            const nLen = Math.hypot(nx, ny, nz) || 1.0;
+            normals.push([nx / nLen, ny / nLen, nz / nLen]);
+          }
+        }
+      }
+
+      const wireframeIndices = [];
+      for (let k = 0; k < modelData.triangles.length; k++) {
+        const [a, b, c] = modelData.triangles[k];
+        wireframeIndices.push(a, b, b, c, c, a);
+      }
+
       return {
         vertices: modelData.vertices,
         triangles: modelData.triangles,
         uvs,
+        normals,
+        wireframeIndices,
         confidences: modelData.confidence_per_vertex || [],
         isCranial: modelData.is_cranial || modelData.vertices.map(([x, y, z]) => z < 0.05 || Math.abs(x) > 0.44),
       };
@@ -466,343 +748,201 @@ export default function FaceMesh3DViewer({
     return buildAnatomicalFaceMesh(modelData?.face_metadata, covered);
   }, [modelData, photos]);
 
-  // Main 3D Rendering Engine
-  const render3D = useCallback(() => {
+  // Main Hardware WebGL 3D Rendering Engine
+  const renderWebGL = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+
+    if (!glStateRef.current) {
+      glStateRef.current = initWebGL(canvas);
+    }
+    const state = glStateRef.current;
+    if (!state) return;
+
+    const { gl, prog, buffers, attribs, uniforms, texture } = state;
 
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth || width;
     const h = canvas.clientHeight || height;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    ctx.scale(dpr, dpr);
-
-    // Deep modern studio background with vignette
-    const bgGrad = ctx.createRadialGradient(w / 2, h / 2, 20, w / 2, h / 2, Math.max(w, h) * 0.85);
-    bgGrad.addColorStop(0, "#162030");
-    bgGrad.addColorStop(0.65, "#0b1018");
-    bgGrad.addColorStop(1, "#06090e");
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(0, 0, w, h);
-
-    // Subtle 3D volumetric depth cage rings
-    ctx.strokeStyle = "rgba(124, 158, 255, 0.05)";
-    ctx.lineWidth = 1;
-    for (let r = 50; r < Math.min(w, h) / 1.6; r += 50) {
-      ctx.beginPath();
-      ctx.ellipse(w / 2, h / 2, r, r * 0.85, 0, 0, Math.PI * 2);
-      ctx.stroke();
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
     }
+    gl.viewport(0, 0, canvas.width, canvas.height);
 
-    const vertices = mesh.vertices;
-    const triangles = mesh.triangles;
-    const uvs = mesh.uvs;
-    const confidences = mesh.confidences;
+    gl.useProgram(prog);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
 
-  // Precalculate trigonometric transforms
-  const cosY = Math.cos(yaw);
-  const sinY = Math.sin(yaw);
-  const cosP = Math.cos(pitch);
-  const sinP = Math.sin(pitch);
+    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  const fov = 3.25 * zoom;
-  const scale = Math.min(w, h) * 0.52;
+    // Flatten vertex data into typed arrays
+    const numVerts = mesh.vertices.length;
+    const posArr = new Float32Array(numVerts * 3);
+    const normArr = new Float32Array(numVerts * 3);
+    const uvArr = new Float32Array(numVerts * 2);
+    const colArr = new Float32Array(numVerts * 4);
+    const cranialArr = new Float32Array(numVerts);
 
-  // Transform 3D vertices to 2D screen coordinates with perspective projection
-  const transformed = vertices.map((v, idx) => {
-    const [x, y, z] = v;
-    // 1. Yaw (Y-axis)
-    const x1 = x * cosY + z * sinY;
-    const y1 = y;
-    const z1 = -x * sinY + z * cosY;
+    for (let i = 0; i < numVerts; i++) {
+      const v = mesh.vertices[i];
+      posArr[i * 3] = v[0];
+      posArr[i * 3 + 1] = v[1];
+      posArr[i * 3 + 2] = v[2];
 
-    // 2. Pitch (X-axis)
-    const x2 = x1;
-    const y2 = y1 * cosP - z1 * sinP;
-    const z2 = y1 * sinP + z1 * cosP;
+      const n = mesh.normals ? mesh.normals[i] : [0, 0, 1];
+      normArr[i * 3] = n[0];
+      normArr[i * 3 + 1] = n[1];
+      normArr[i * 3 + 2] = n[2];
 
-    // 3. Perspective
-    const cameraDist = 2.25;
-    const depth = cameraDist - z2;
-    const pScale = depth > 0.1 ? fov / depth : 0.01;
+      const uv = mesh.uvs ? mesh.uvs[i] : { u: 0.5, v: 0.5 };
+      uvArr[i * 2] = uv.u;
+      uvArr[i * 2 + 1] = uv.v;
 
-    const screenX = w / 2 + x2 * scale * pScale;
-    const screenY = h / 2 - y2 * scale * pScale;
-
-    const conf = confidences[idx] !== undefined ? confidences[idx] : 1.0;
-    const dev = deviations ? deviations[idx] || 0 : 0;
-    const uv = uvs[idx] || { u: 0.5, v: 0.5 };
-
-    const cranialFlag = mesh.isCranial ? mesh.isCranial[idx] : (z < 0.05 || Math.abs(x) > 0.44);
-    return { x: screenX, y: screenY, z: z2, origX: x, origY: y, origZ: z, conf, dev, uv, idx, isCranial: cranialFlag };
-  });
-
-  // Light source vector coming from front-top-right
-  const lx = 0.45;
-  const ly = 0.65;
-  const lz = 0.85;
-  const lLen = Math.hypot(lx, ly, lz);
-  const lnx = lx / lLen;
-  const lny = ly / lLen;
-  const lnz = lz / lLen;
-
-  // Determine active texture photo based on yaw rotation
-  let activeTexture = loadedImages.front;
-  if (yaw < -0.3 && loadedImages.left) {
-    activeTexture = loadedImages.left;
-  } else if (yaw > 0.3 && loadedImages.right) {
-    activeTexture = loadedImages.right;
-  }
-
-  const crop = activeTexture ? getFaceCropRect(activeTexture, modelData?.face_metadata) : null;
-
-  // ── 2. SORT TRIANGLES BY DEPTH (Painter's Algorithm) ──
-  const sortedTris = triangles
-    .map((tri, triIdx) => {
-      const v0 = transformed[tri[0]];
-      const v1 = transformed[tri[1]];
-      const v2 = transformed[tri[2]];
-      if (!v0 || !v1 || !v2) return null;
-      const avgZ = (v0.z + v1.z + v2.z) / 3;
-      const avgConf = (v0.conf + v1.conf + v2.conf) / 3;
-      const avgDev = (v0.dev + v1.dev + v2.dev) / 3;
-      return { tri, v0, v1, v2, avgZ, avgConf, avgDev, triIdx };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.avgZ - b.avgZ);
-
-  // ── 3. RENDER 3D FACETS ACCORDING TO ACTIVE MODE ──
-  sortedTris.forEach((item) => {
-    const { v0, v1, v2, avgConf, avgDev } = item;
-
-    // Surface normal calculation for 3D Lambertian directional lighting
-    const ax = v1.origX - v0.origX;
-    const ay = v1.origY - v0.origY;
-    const az = v1.origZ - v0.origZ;
-    const bx = v2.origX - v0.origX;
-    const by = v2.origY - v0.origY;
-    const bz = v2.origZ - v0.origZ;
-
-    let nx = ay * bz - az * by;
-    let ny = az * bx - ax * bz;
-    let nz = ax * by - ay * bx;
-    const nLen = Math.hypot(nx, ny, nz) || 1;
-    nx /= nLen;
-    ny /= nLen;
-    nz /= nLen;
-
-    // Rotate surface normal with yaw and pitch
-    const rnx = nx * cosY + nz * sinY;
-    const rny = ny * cosP - (-nx * sinY + nz * cosY) * sinP;
-    const rnz = ny * sinP + (-nx * sinY + nz * cosY) * cosP;
-
-    // Backface culling: polygons facing away from camera are culled to prevent inside-out projection
-    if (rnz <= 0.01) return;
-
-    // Pure posterior cranial facets (entirely on back of head behind the ears)
-    const isPureCranial = v0.isCranial && v1.isCranial && v2.isCranial;
-    const isLateral = Math.abs(v0.origX) > 0.34 || Math.abs(v1.origX) > 0.34 || Math.abs(v2.origX) > 0.34;
-
-    // Continuous facial surface shading (Lambertian directional lighting)
-    const dot = rnx * lnx + rny * lny + rnz * lnz;
-    const intensity = Math.max(0.28, Math.min(1.0, 0.38 + 0.62 * Math.max(0, dot)));
-
-    // Cranial facets: Render anatomical hair/skull shading with 3D directional light
-    if (isPureCranial) {
-      const [phR, phG, phB] = facePalette.hair;
-      const hr = Math.floor(phR * intensity);
-      const hg = Math.floor(phG * intensity);
-      const hb = Math.floor(phB * intensity);
-      ctx.beginPath();
-      ctx.moveTo(v0.x, v0.y);
-      ctx.lineTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.closePath();
-      ctx.fillStyle = `rgb(${hr}, ${hg}, ${hb})`;
-      ctx.fill();
-      if (renderMode === "wireframe") {
-        ctx.strokeStyle = "rgba(100, 190, 255, 0.35)";
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-      }
-      return;
-    }
-
-    const uv0 = v0.uv;
-    const uv1 = v1.uv;
-    const uv2 = v2.uv;
-
-    if (renderMode === "photo") {
-      if (activeTexture) {
-        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity, crop);
-        // Seamless skin tone blend at lateral boundaries
-        if (isLateral && !loadedImages.left && !loadedImages.right) {
-          const [psR, psG, psB] = facePalette.skin;
-          const maxDist = Math.max(Math.abs(v0.origX), Math.abs(v1.origX), Math.abs(v2.origX));
-          const blendAlpha = Math.min(0.70, Math.max(0.20, ((maxDist - 0.32) / 0.14) * 0.70));
-          ctx.beginPath();
-          ctx.moveTo(v0.x, v0.y);
-          ctx.lineTo(v1.x, v1.y);
-          ctx.lineTo(v2.x, v2.y);
-          ctx.closePath();
-          ctx.fillStyle = `rgba(${psR}, ${psG}, ${psB}, ${blendAlpha})`;
-          ctx.fill();
-        }
-      } else {
-        // Realistic skin tone fallback if photo still loading
-        const [psR, psG, psB] = facePalette.skin;
-        const r = Math.floor(psR * intensity);
-        const g = Math.floor(psG * intensity);
-        const b = Math.floor(psB * intensity);
-        ctx.beginPath();
-        ctx.moveTo(v0.x, v0.y);
-        ctx.lineTo(v1.x, v1.y);
-        ctx.lineTo(v2.x, v2.y);
-        ctx.closePath();
-        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.95)`;
-        ctx.fill();
-      }
-    } else if (renderMode === "shaded") {
-      const [psR, psG, psB] = facePalette.skin;
-      const r = Math.floor(psR * intensity);
-      const g = Math.floor(psG * intensity);
-      const b = Math.floor(psB * intensity);
-      ctx.beginPath();
-      ctx.moveTo(v0.x, v0.y);
-      ctx.lineTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.closePath();
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.95)`;
-      ctx.fill();
-      ctx.strokeStyle = "rgba(120, 85, 70, 0.12)";
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-    } else if (renderMode === "wireframe") {
-      if (activeTexture) {
-        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.40, crop);
-      }
-      ctx.beginPath();
-      ctx.moveTo(v0.x, v0.y);
-      ctx.lineTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(14, 24, 40, 0.35)";
-      ctx.fill();
-      ctx.strokeStyle = "rgba(100, 190, 255, 0.70)";
-      ctx.lineWidth = 0.7;
-      ctx.stroke();
-    } else if (renderMode === "confidence") {
-      if (activeTexture) {
-        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.70, crop);
-      }
-      ctx.beginPath();
-      ctx.moveTo(v0.x, v0.y);
-      ctx.lineTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.closePath();
-      if (avgConf >= 0.85) {
-        ctx.fillStyle = "rgba(34, 197, 94, 0.40)";
-        ctx.strokeStyle = "rgba(34, 197, 94, 0.75)";
-      } else if (avgConf >= 0.50) {
-        ctx.fillStyle = "rgba(245, 158, 11, 0.50)";
-        ctx.strokeStyle = "rgba(245, 158, 11, 0.85)";
-      } else {
-        ctx.fillStyle = "rgba(239, 68, 68, 0.60)";
-        ctx.strokeStyle = "rgba(220, 38, 38, 0.95)";
-      }
-      ctx.lineWidth = 0.8;
-      ctx.fill();
-      ctx.stroke();
-    } else if (renderMode === "comparison") {
-      if (activeTexture) {
-        drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity * 0.70, crop);
-      }
-      ctx.beginPath();
-      ctx.moveTo(v0.x, v0.y);
-      ctx.lineTo(v1.x, v1.y);
-      ctx.lineTo(v2.x, v2.y);
-      ctx.closePath();
-      if (avgDev < 0.035) {
-        ctx.fillStyle = "rgba(34, 197, 94, 0.40)";
-        ctx.strokeStyle = "rgba(34, 197, 94, 0.75)";
-      } else if (avgDev < 0.075) {
-        ctx.fillStyle = "rgba(234, 179, 8, 0.50)";
-        ctx.strokeStyle = "rgba(234, 179, 8, 0.85)";
-      } else {
-        ctx.fillStyle = "rgba(239, 68, 68, 0.60)";
-        ctx.strokeStyle = "rgba(239, 68, 68, 0.95)";
-      }
-      ctx.lineWidth = 0.8;
-      ctx.fill();
-      ctx.stroke();
-    }
-  });
-
-  // ── 4. KEY ANATOMICAL LANDMARKS ──
-  // Show key landmarks in wireframe, confidence, and comparison modes to orient facial features
-  if (renderMode !== "photo") {
-    const keyLandmarks = [
-      transformed.find((p) => Math.abs(p.origX - (-0.28)) < 0.07 && Math.abs(p.origY - 0.18) < 0.07),
-      transformed.find((p) => Math.abs(p.origX - 0.28) < 0.07 && Math.abs(p.origY - 0.18) < 0.07),
-      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.08)) < 0.07),
-      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.30)) < 0.07),
-      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.38)) < 0.07),
-      transformed.find((p) => Math.abs(p.origX) < 0.06 && Math.abs(p.origY - (-0.58)) < 0.07),
-      transformed.find((p) => Math.abs(p.origX - (-0.38)) < 0.07 && Math.abs(p.origY) < 0.08),
-      transformed.find((p) => Math.abs(p.origX - 0.38) < 0.07 && Math.abs(p.origY) < 0.08),
-    ].filter(Boolean);
-
-    keyLandmarks.forEach((pt) => {
-      const nodeRad = Math.max(2.2, Math.min(4.2, (pt.z + 1.0) * 2.2));
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, nodeRad, 0, Math.PI * 2);
+      const conf = mesh.confidences && mesh.confidences[i] !== undefined ? mesh.confidences[i] : 1.0;
+      const dev = deviations ? deviations[i] || 0 : 0;
+      const cranial = mesh.isCranial ? (mesh.isCranial[i] ? 1.0 : 0.0) : (v[2] < 0.05 ? 1.0 : 0.0);
+      cranialArr[i] = cranial;
 
       if (renderMode === "confidence") {
-        ctx.fillStyle = pt.conf >= 0.85 ? "#22c55e" : pt.conf >= 0.5 ? "#f59e0b" : "#ef4444";
+        if (conf >= 0.85) {
+          colArr[i * 4] = 0.13; colArr[i * 4 + 1] = 0.77; colArr[i * 4 + 2] = 0.37; colArr[i * 4 + 3] = 1.0;
+        } else if (conf >= 0.50) {
+          colArr[i * 4] = 0.96; colArr[i * 4 + 1] = 0.62; colArr[i * 4 + 2] = 0.04; colArr[i * 4 + 3] = 1.0;
+        } else {
+          colArr[i * 4] = 0.94; colArr[i * 4 + 1] = 0.27; colArr[i * 4 + 2] = 0.27; colArr[i * 4 + 3] = 1.0;
+        }
       } else if (renderMode === "comparison") {
-        ctx.fillStyle = pt.dev < 0.035 ? "#4ade80" : pt.dev < 0.075 ? "#facc15" : "#f87171";
-      } else if (renderMode === "shaded") {
-        ctx.fillStyle = "#e2b89b";
+        if (dev < 0.035) {
+          colArr[i * 4] = 0.13; colArr[i * 4 + 1] = 0.77; colArr[i * 4 + 2] = 0.37; colArr[i * 4 + 3] = 1.0;
+        } else if (dev < 0.075) {
+          colArr[i * 4] = 0.92; colArr[i * 4 + 1] = 0.70; colArr[i * 4 + 2] = 0.03; colArr[i * 4 + 3] = 1.0;
+        } else {
+          colArr[i * 4] = 0.94; colArr[i * 4 + 1] = 0.27; colArr[i * 4 + 2] = 0.27; colArr[i * 4 + 3] = 1.0;
+        }
       } else {
-        ctx.fillStyle = "rgba(147, 197, 253, 0.95)";
+        colArr[i * 4] = 1.0; colArr[i * 4 + 1] = 1.0; colArr[i * 4 + 2] = 1.0; colArr[i * 4 + 3] = 1.0;
       }
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    });
-  }
+    }
 
-    // ── 5. 3D COORDINATE AXES INDICATOR ──
-    const axisX = 36;
-    const axisY = h - 36;
-    const axisLen = 20;
-    // X (Red)
-    ctx.strokeStyle = "#ef4444";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(axisX, axisY);
-    ctx.lineTo(axisX + cosY * axisLen, axisY);
-    ctx.stroke();
-    // Y (Green)
-    ctx.strokeStyle = "#22c55e";
-    ctx.beginPath();
-    ctx.moveTo(axisX, axisY);
-    ctx.lineTo(axisX, axisY - cosP * axisLen);
-    ctx.stroke();
-    // Z (Blue)
-    ctx.strokeStyle = "#3b82f6";
-    ctx.beginPath();
-    ctx.moveTo(axisX, axisY);
-    ctx.lineTo(axisX + sinY * axisLen * 0.7, axisY + sinP * axisLen * 0.7);
-  }, [mesh, modelData, yaw, pitch, zoom, renderMode, deviations, loadedImages, width, height]);
+    // Upload attribute buffers
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.posBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, posArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(attribs.aPosition);
+    gl.vertexAttribPointer(attribs.aPosition, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.normBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, normArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(attribs.aNormal);
+    gl.vertexAttribPointer(attribs.aNormal, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.uvBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, uvArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(attribs.aUv);
+    gl.vertexAttribPointer(attribs.aUv, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.colBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, colArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(attribs.aColor);
+    gl.vertexAttribPointer(attribs.aColor, 4, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.cranialBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, cranialArr, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(attribs.aIsCranial);
+    gl.vertexAttribPointer(attribs.aIsCranial, 1, gl.FLOAT, false, 0, 0);
+
+    // Setup active texture
+    let activeTexture = loadedImages.front;
+    if (yaw < -0.3 && loadedImages.left) {
+      activeTexture = loadedImages.left;
+    } else if (yaw > 0.3 && loadedImages.right) {
+      activeTexture = loadedImages.right;
+    }
+
+    if (activeTexture) {
+      const crop = getFaceCropRect(activeTexture, modelData?.face_metadata);
+      const cropCanvas = document.createElement("canvas");
+      cropCanvas.width = 512;
+      cropCanvas.height = 512;
+      const cropCtx = cropCanvas.getContext("2d");
+      const sx = crop ? crop.sx : 0;
+      const sy = crop ? crop.sy : 0;
+      const sw = crop ? crop.sw : activeTexture.width;
+      const sh = crop ? crop.sh : activeTexture.height;
+      cropCtx.drawImage(activeTexture, sx, sy, sw, sh, 0, 0, 512, 512);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cropCanvas);
+      gl.uniform1i(uniforms.uTexture, 0);
+      gl.uniform1f(uniforms.uHasTexture, 1.0);
+    } else {
+      gl.uniform1f(uniforms.uHasTexture, 0.0);
+    }
+
+    // Set lighting & colors
+    const skinR = facePalette.skin[0] / 255;
+    const skinG = facePalette.skin[1] / 255;
+    const skinB = facePalette.skin[2] / 255;
+    gl.uniform3f(uniforms.uSkinColor, skinR, skinG, skinB);
+
+    const hairR = facePalette.hair[0] / 255;
+    const hairG = facePalette.hair[1] / 255;
+    const hairB = facePalette.hair[2] / 255;
+    gl.uniform3f(uniforms.uHairColor, hairR, hairG, hairB);
+
+    // Three-point lights
+    gl.uniform3f(uniforms.uLightDir1, 0.42, 0.65, 0.63); // Key
+    gl.uniform3f(uniforms.uLightDir2, -0.65, 0.20, 0.45); // Fill
+    gl.uniform3f(uniforms.uLightDir3, 0.0, -0.55, -0.83); // Rim
+
+    // Camera matrices
+    const aspect = w / Math.max(1, h);
+    const proj = mat4Perspective(Math.PI / 4.2, aspect, 0.1, 20.0);
+    const cameraDist = 2.45 / zoom;
+    const mv = mat4ModelView(yaw, pitch, cameraDist, 0.04);
+    const normMat = mat3FromMat4(mv);
+
+    gl.uniformMatrix4fv(uniforms.uProjection, false, new Float32Array(proj));
+    gl.uniformMatrix4fv(uniforms.uModelView, false, new Float32Array(mv));
+    gl.uniformMatrix3fv(uniforms.uNormalMatrix, false, new Float32Array(normMat));
+
+    // Render mode uniform mapping
+    let modeCode = 0; // photo
+    if (renderMode === "shaded") modeCode = 1;
+    else if (renderMode === "wireframe") modeCode = 2;
+    else if (renderMode === "confidence") modeCode = 3;
+    else if (renderMode === "comparison") modeCode = 4;
+    gl.uniform1i(uniforms.uRenderMode, modeCode);
+
+    // Upload & draw triangles
+    const triIndices = new Uint16Array(mesh.triangles.flat());
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.triBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, triIndices, gl.DYNAMIC_DRAW);
+    gl.drawElements(gl.TRIANGLES, triIndices.length, gl.UNSIGNED_SHORT, 0);
+
+    // If Wireframe mode: draw overlaid glowing mesh lines
+    if (renderMode === "wireframe" && mesh.wireframeIndices) {
+      gl.uniform1i(uniforms.uRenderMode, 5); // Wireframe line color
+      gl.disable(gl.CULL_FACE);
+      const lineIndices = new Uint16Array(mesh.wireframeIndices);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.lineBuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, lineIndices, gl.DYNAMIC_DRAW);
+      gl.drawElements(gl.LINES, lineIndices.length, gl.UNSIGNED_SHORT, 0);
+    }
+  }, [mesh, modelData, yaw, pitch, zoom, renderMode, deviations, loadedImages, facePalette, width, height]);
 
   useEffect(() => {
-    render3D();
-  }, [render3D]);
+    renderWebGL();
+  }, [renderWebGL]);
 
   // Mouse & Touch Drag Handlers
   const handleMouseDown = (e) => {
@@ -892,21 +1032,21 @@ export default function FaceMesh3DViewer({
             <button
               className={`mode-pill ${renderMode === "photo" ? "active" : ""}`}
               onClick={() => setRenderMode("photo")}
-              title="True-to-life 3D Photo Projection"
+              title="True-to-life 3D Photo Projection with Hardware Shading"
             >
               Photo 3D
             </button>
             <button
               className={`mode-pill ${renderMode === "shaded" ? "active" : ""}`}
               onClick={() => setRenderMode("shaded")}
-              title="Realistic Anatomical Skin Surface"
+              title="Sculpted 3D Anatomical Bone & Cartilage Surface"
             >
               Surface
             </button>
             <button
               className={`mode-pill ${renderMode === "wireframe" ? "active" : ""}`}
               onClick={() => setRenderMode("wireframe")}
-              title="Polygonal Lattice Mesh"
+              title="High-Density Polygonal Lattice Mesh"
             >
               Wireframe
             </button>
@@ -940,6 +1080,12 @@ export default function FaceMesh3DViewer({
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleMouseUp}
+        style={{
+          background: "radial-gradient(circle at 50% 45%, #162438 0%, #0c1422 65%, #05080e 100%)",
+          borderRadius: "8px",
+          overflow: "hidden",
+          position: "relative",
+        }}
       >
         <canvas
           ref={canvasRef}
