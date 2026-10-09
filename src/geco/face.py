@@ -170,16 +170,15 @@ def verify_detailed(
 def build_anatomical_face_mesh(
     face_meta: dict | None = None,
     covered_angles: set[str] | list[str] | None = None,
-    n_theta: int = 24,
-    n_phi: int = 32,
+    n_theta: int = 28,
+    n_phi: int = 36,
 ) -> tuple[list[list[float]], list[list[int]], list[float], list[dict[str, float]], list[bool]]:
     """Generates an authentic 3D anatomical human head model using a continuous closed
-    ellipsoidal head manifold:
-    - Real human anthropometric proportions (Width : Height : Depth = 0.72 : 1.0 : 0.58).
-    - Smooth, dome-shaped cranial vault (zero pinched cones or diamond tips at crown).
-    - Anatomically accurate nose bridge and tip protrusion (subtle ~0.08, zero Pinocchio spikes).
-    - Orbit socket dips, natural brow ridge, philtrum, lips, and mandibular chin.
-    - Solid volumetric cranial skull extending into the occiput for authentic 360-degree rotation.
+    head manifold with realistic facial contours and profile silhouette:
+    - Real human anthropometric proportions and profile depth.
+    - Sculpted nasal bridge and pronasale tip protrusion.
+    - Orbit socket depths, superciliary arches, cheekbones, lips, and mandibular chin.
+    - Solid volumetric cranial vault extending into the occiput for authentic 360-degree rotation.
     """
     import math
 
@@ -226,12 +225,10 @@ def build_anatomical_face_mesh(
         scale_jaw_w = max(0.85, min(1.15, aspect_ratio / 0.85))
         scale_face_h = max(0.90, min(1.15, 0.85 / max(0.5, aspect_ratio)))
 
-    # Grid of latitudes theta (from 0.12 at top crown to 0.92*pi at chin/neck)
-    thetas = [0.12 + (math.pi * 0.80 * j) / (n_theta - 1) for j in range(n_theta)]
+    # Grid of latitudes theta (from 0.08 at top crown to 0.92*pi at chin/neck)
+    thetas = [0.08 + (math.pi * 0.84 * j) / (n_theta - 1) for j in range(n_theta)]
     # Grid of longitudes phi (-pi to pi)
     phis = [-math.pi + (2.0 * math.pi * i) / n_phi for i in range(n_phi)]
-
-    phi_face = 1.25  # ~71.6 degrees: facial frontal span
 
     vertices = []
     uvs = []
@@ -239,88 +236,106 @@ def build_anatomical_face_mesh(
     is_cranial = []
 
     for j, t in enumerate(thetas):
-        raw_y = math.cos(t) * 0.68
+        raw_y = math.cos(t) * 0.70
         y = round(raw_y * scale_face_h, 4)
 
-        # Head cross-section radii at vertical level y
         if y >= 0:
-            shape_factor = math.sqrt(max(0.04, 1.0 - (y / 0.72) ** 2))
-            rx = 0.48 * shape_factor
-            rz_front = 0.28 * shape_factor
-            rz_back = 0.40 * shape_factor
+            shape = math.sqrt(max(0.04, 1.0 - (y / 0.76) ** 2))
+            rx = 0.46 * shape
+            rz_back = 0.44 * shape
         else:
-            prog = -y / 0.65
-            rx = 0.48 * (1.0 - 0.32 * (prog ** 1.2)) * scale_jaw_w
-            rz_front = 0.28 * (1.0 - 0.20 * prog)
-            rz_back = 0.40 * (1.0 - 0.45 * prog)
+            prog = -y / 0.68
+            rx = 0.46 * (1.0 - 0.28 * (prog ** 1.1)) * scale_jaw_w
+            rz_back = 0.44 * (1.0 - 0.40 * prog)
 
         for i, p in enumerate(phis):
             sin_p = math.sin(p)
             cos_p = math.cos(p)
 
             x = round(rx * sin_p, 4)
-            is_front = cos_p >= 0
-            z_base = (rz_front if is_front else rz_back) * cos_p
 
-            # Sagittal facial features (only on the front face)
-            z_relief = 0.0
-            face_vertex = abs(p) <= phi_face and -0.62 <= y <= 0.52
+            if cos_p >= 0:
+                # Anterior face
+                z_base = 0.16 * cos_p
 
-            if face_vertex:
-                # 1. 3D Anatomical Nose (bridge down to tip): realistic anthropometric protrusion (0.075 max)
+                # 1. 3D Anatomical Nose
+                z_nose = 0.0
                 nose_ymin = -0.16 + shift_nose_y
-                nose_ymax = 0.14 + shift_nose_y
+                nose_ymax = 0.20 + shift_nose_y
                 if nose_ymin <= y <= nose_ymax:
-                    lat_n = math.exp(-0.5 * (p / 0.12) ** 2)
+                    lat_n = math.exp(-0.5 * (p / 0.13) ** 2)
                     nose_tip_y = -0.06 + shift_nose_y
                     if y >= nose_tip_y:
-                        vert_n = 0.03 + 0.045 * ((nose_ymax - y) / max(0.01, nose_ymax - nose_tip_y))
+                        prog_n = (nose_ymax - y) / max(0.01, nose_ymax - nose_tip_y)
+                        vert_n = 0.04 + 0.14 * prog_n
                     else:
-                        vert_n = 0.03 + 0.045 * ((y - nose_ymin) / max(0.01, nose_tip_y - nose_ymin))
-                    z_relief += vert_n * lat_n * min(1.20, max(0.80, scale_nose_z))
+                        prog_n = (y - nose_ymin) / max(0.01, nose_tip_y - nose_ymin)
+                        vert_n = 0.04 + 0.14 * prog_n
+                    z_nose = vert_n * lat_n * min(1.25, max(0.80, scale_nose_z))
 
-                # 2. Orbits (eye sockets at y = 0.12)
-                eye_y = 0.12 + shift_eye_y
-                d_eye = math.sqrt(((abs(p) - 0.35 * scale_eye_w) / 0.20) ** 2 + ((y - eye_y) / 0.12) ** 2)
-                if d_eye < 1.0:
-                    z_relief += -0.020 * (1.0 - d_eye ** 2)
+                # 2. Orbits (eye sockets)
+                z_orbit = 0.0
+                eye_y = 0.14 + shift_eye_y
+                eye_dist = math.sqrt(((abs(p) - 0.35 * scale_eye_w) / 0.20) ** 2 + ((y - eye_y) / 0.12) ** 2)
+                if eye_dist < 1.0:
+                    z_orbit = -0.040 * (1.0 - eye_dist ** 2)
 
-                # 3. Brow ridge at y = 0.22
-                brow_y = 0.22 + shift_eye_y
-                if abs(y - brow_y) < 0.08 and abs(p) < 0.48:
-                    z_relief += 0.016 * math.exp(-0.5 * (p / 0.35) ** 2) * (1.0 - abs(y - brow_y) / 0.08)
+                # 3. Brow ridge
+                z_brow = 0.0
+                brow_y = 0.26 + shift_eye_y
+                if abs(y - brow_y) < 0.07 and abs(p) < 0.50:
+                    z_brow = 0.035 * math.exp(-0.5 * (p / 0.35) ** 2) * (1.0 - abs(y - brow_y) / 0.07)
 
-                # 4. Lips centered at y = -0.25
-                mouth_ymin = -0.32 + shift_mouth_y
+                # 4. Cheekbones
+                z_cheek = 0.0
+                cheek_y = 0.06 + shift_eye_y
+                cheek_dist = math.sqrt(((abs(p) - 0.42) / 0.14) ** 2 + ((y - cheek_y) / 0.12) ** 2)
+                if cheek_dist < 1.0:
+                    z_cheek = 0.040 * (1.0 - cheek_dist ** 2)
+
+                # 5. Lips
+                z_lips = 0.0
+                mouth_ymin = -0.36 + shift_mouth_y
                 mouth_ymax = -0.18 + shift_mouth_y
-                if mouth_ymin <= y <= mouth_ymax and abs(p) < 0.30:
-                    lat_m = math.exp(-0.5 * (p / (0.20 * scale_mouth_w)) ** 2)
-                    z_relief += 0.024 * math.sin(((y - mouth_ymin) / 0.14) * math.pi) * lat_m
+                if mouth_ymin <= y <= mouth_ymax and abs(p) < 0.28:
+                    lat_m = math.exp(-0.5 * (p / (0.18 * scale_mouth_w)) ** 2)
+                    fissure_y = -0.27 + shift_mouth_y
+                    if y >= fissure_y:
+                        z_lips = 0.038 * math.sin(((y - fissure_y) / max(0.01, mouth_ymax - fissure_y)) * math.pi) * lat_m
+                    else:
+                        z_lips = 0.042 * math.sin(((y - mouth_ymin) / max(0.01, fissure_y - mouth_ymin)) * math.pi) * lat_m
 
-                # 5. Chin (pogonion) centered at y = -0.46
-                chin_ymin = -0.54
-                chin_ymax = -0.38
-                if chin_ymin <= y <= chin_ymax and abs(p) < 0.25:
+                # 6. Mentolabial crease
+                z_crease = 0.0
+                crease_y = -0.40 + shift_mouth_y
+                if abs(y - crease_y) < 0.05 and abs(p) < 0.24:
+                    z_crease = -0.025 * math.exp(-0.5 * (p / 0.18) ** 2) * (1.0 - abs(y - crease_y) / 0.05)
+
+                # 7. Chin (pogonion)
+                z_chin = 0.0
+                chin_ymin = -0.58
+                chin_ymax = -0.42
+                if chin_ymin <= y <= chin_ymax and abs(p) < 0.24:
                     lat_c = math.exp(-0.5 * (p / 0.16) ** 2)
-                    z_relief += 0.030 * math.sin(((y - chin_ymin) / 0.16) * math.pi) * lat_c
+                    z_chin = 0.060 * math.sin(((y - chin_ymin) / 0.16) * math.pi) * lat_c
 
-            z = round(z_base + z_relief, 4)
-            vertices.append([x, y, z])
-            is_cranial.append(not face_vertex)
+                z = round(z_base + z_nose + z_orbit + z_brow + z_cheek + z_lips + z_crease + z_chin, 4)
+                is_cranial.append(False)
 
-            # UV mapping calibrated to canonical facial proportions
-            if face_vertex:
-                u = 0.50 + 0.45 * p
-                v = 0.55 - 0.75 * y
+                u = 0.50 + 0.44 * p
+                v = 0.55 - 0.72 * y
                 u = max(0.01, min(0.99, u))
                 v = max(0.01, min(0.99, v))
                 uvs.append({"u": round(u, 4), "v": round(v, 4)})
             else:
+                z = round(-rz_back * (abs(cos_p) ** 0.85), 4)
+                is_cranial.append(True)
                 uvs.append({"u": 0.5, "v": 0.5})
 
-            # Confidence
+            vertices.append([x, y, z])
+
             conf = 0.95 if "front" in covered else 0.40
-            if abs(p) > phi_face * 0.70:
+            if abs(p) > 0.85:
                 side_covered = ("left" in covered and p < 0) or ("right" in covered and p > 0)
                 conf = 0.95 if side_covered else 0.45
             confidences.append(round(conf, 2))

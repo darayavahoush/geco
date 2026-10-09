@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
  * and conforms to natural human facial curves (forehead slope, nose bridge/tip,
  * eye socket dips, lips, and chin) without hard-edged mask boundaries or origami folds.
  */
-export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front"], nTheta = 24, nPhi = 32) {
+export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front"], nTheta = 28, nPhi = 36) {
   const covered = new Set(coveredAngles || ["front"]);
 
   let scaleEyeW = 1.0;
@@ -50,18 +50,16 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
     scaleFaceH = Math.max(0.90, Math.min(1.15, 0.85 / Math.max(0.5, aspect)));
   }
 
-  // Grid of latitudes theta (from 0.12 at top crown to 0.92*pi at chin/neck)
+  // Grid of latitudes theta (from 0.08 at top crown to 0.92*pi at chin/submental neck)
   const thetas = [];
   for (let j = 0; j < nTheta; j++) {
-    thetas.push(0.12 + (Math.PI * 0.80 * j) / (nTheta - 1));
+    thetas.push(0.08 + (Math.PI * 0.84 * j) / (nTheta - 1));
   }
   // Grid of longitudes phi (-pi to pi)
   const phis = [];
   for (let i = 0; i < nPhi; i++) {
     phis.push(-Math.PI + (2.0 * Math.PI * i) / nPhi);
   }
-
-  const phiFace = 1.25; // ~71.6 degrees: facial frontal span
 
   const vertices = [];
   const uvs = [];
@@ -70,21 +68,18 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
 
   for (let j = 0; j < nTheta; j++) {
     const t = thetas[j];
-    const rawY = Math.cos(t) * 0.68;
+    const rawY = Math.cos(t) * 0.70;
     const y = Math.round(rawY * scaleFaceH * 10000) / 10000;
 
-    // Head cross-section radii at vertical level y
-    let rx, rzFront, rzBack;
+    let rx, rzBack;
     if (y >= 0) {
-      const shapeFactor = Math.sqrt(Math.max(0.04, 1.0 - Math.pow(y / 0.72, 2)));
-      rx = 0.48 * shapeFactor;
-      rzFront = 0.28 * shapeFactor;
-      rzBack = 0.40 * shapeFactor;
+      const shape = Math.sqrt(Math.max(0.04, 1.0 - Math.pow(y / 0.76, 2)));
+      rx = 0.46 * shape;
+      rzBack = 0.44 * shape;
     } else {
-      const prog = -y / 0.65;
-      rx = 0.48 * (1.0 - 0.32 * Math.pow(prog, 1.2)) * scaleJawW;
-      rzFront = 0.28 * (1.0 - 0.20 * prog);
-      rzBack = 0.40 * (1.0 - 0.45 * prog);
+      const prog = -y / 0.68;
+      rx = 0.46 * (1.0 - 0.28 * Math.pow(prog, 1.1)) * scaleJawW;
+      rzBack = 0.44 * (1.0 - 0.40 * prog);
     }
 
     for (let i = 0; i < nPhi; i++) {
@@ -93,78 +88,104 @@ export function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front
       const cosP = Math.cos(p);
 
       const x = Math.round(rx * sinP * 10000) / 10000;
-      const isFront = cosP >= 0;
-      const zBase = (isFront ? rzFront : rzBack) * cosP;
+      let z;
 
-      // Sagittal facial features (only on the front face)
-      let zRelief = 0.0;
-      const isFace = Math.abs(p) <= phiFace && y >= -0.62 && y <= 0.52;
+      if (cosP >= 0) {
+        // Frontal & lateral facial geometry with rich anatomical relief
+        const zBase = 0.16 * cosP;
 
-      if (isFace) {
-        // 1. 3D Anatomical Nose (bridge down to tip): realistic anthropometric protrusion (0.075 max)
+        // 1. Nose structure: prominent nasal dorsum, bridge & pronasale tip
+        let zNose = 0.0;
         const noseYMin = -0.16 + shiftNoseY;
-        const noseYMax = 0.14 + shiftNoseY;
+        const noseYMax = 0.20 + shiftNoseY;
         if (y >= noseYMin && y <= noseYMax) {
-          const latN = Math.exp(-0.5 * Math.pow(p / 0.12, 2));
+          const latN = Math.exp(-0.5 * Math.pow(p / 0.13, 2));
           const noseTipY = -0.06 + shiftNoseY;
           let vertN = 0.0;
           if (y >= noseTipY) {
-            vertN = 0.03 + 0.045 * ((noseYMax - y) / Math.max(0.01, noseYMax - noseTipY));
+            const progN = (noseYMax - y) / Math.max(0.01, noseYMax - noseTipY);
+            vertN = 0.04 + 0.14 * progN;
           } else {
-            vertN = 0.03 + 0.045 * ((y - noseYMin) / Math.max(0.01, noseTipY - noseYMin));
+            const progN = (y - noseYMin) / Math.max(0.01, noseTipY - noseYMin);
+            vertN = 0.04 + 0.14 * progN;
           }
-          zRelief += vertN * latN * Math.min(1.20, Math.max(0.80, scaleNoseZ));
+          zNose = vertN * latN * Math.min(1.25, Math.max(0.80, scaleNoseZ));
         }
 
-        // 2. Orbits (eye sockets centered at y = 0.12)
-        const eyeY = 0.12 + shiftEyeY;
-        const dEye = Math.sqrt(Math.pow((Math.abs(p) - 0.35 * scaleEyeW) / 0.20, 2) + Math.pow((y - eyeY) / 0.12, 2));
-        if (dEye < 1.0) {
-          zRelief += -0.020 * (1.0 - dEye * dEye);
+        // 2. Eye sockets (recessed orbital depths)
+        let zOrbit = 0.0;
+        const eyeY = 0.14 + shiftEyeY;
+        const eyeDist = Math.sqrt(Math.pow((Math.abs(p) - 0.35 * scaleEyeW) / 0.20, 2) + Math.pow((y - eyeY) / 0.12, 2));
+        if (eyeDist < 1.0) {
+          zOrbit = -0.040 * (1.0 - eyeDist * eyeDist);
         }
 
-        // 3. Brow ridge at y = 0.22
-        const browY = 0.22 + shiftEyeY;
-        if (Math.abs(y - browY) < 0.08 && Math.abs(p) < 0.48) {
-          zRelief += 0.016 * Math.exp(-0.5 * Math.pow(p / 0.35, 2)) * (1.0 - Math.abs(y - browY) / 0.08);
+        // 3. Brow ridge (superciliary arches)
+        let zBrow = 0.0;
+        const browY = 0.26 + shiftEyeY;
+        if (Math.abs(y - browY) < 0.07 && Math.abs(p) < 0.50) {
+          zBrow = 0.035 * Math.exp(-0.5 * Math.pow(p / 0.35, 2)) * (1.0 - Math.abs(y - browY) / 0.07);
         }
 
-        // 4. Lips centered at y = -0.25
-        const mouthYMin = -0.32 + shiftMouthY;
+        // 4. Cheekbones (zygomatic arches)
+        let zCheek = 0.0;
+        const cheekY = 0.06 + shiftEyeY;
+        const cheekDist = Math.sqrt(Math.pow((Math.abs(p) - 0.42) / 0.14, 2) + Math.pow((y - cheekY) / 0.12, 2));
+        if (cheekDist < 1.0) {
+          zCheek = 0.040 * (1.0 - cheekDist * cheekDist);
+        }
+
+        // 5. Lips (upper and lower lip projection)
+        let zLips = 0.0;
+        const mouthYMin = -0.36 + shiftMouthY;
         const mouthYMax = -0.18 + shiftMouthY;
-        if (y >= mouthYMin && y <= mouthYMax && Math.abs(p) < 0.30) {
-          const latM = Math.exp(-0.5 * Math.pow(p / (0.20 * scaleMouthW), 2));
-          zRelief += 0.024 * Math.sin(((y - mouthYMin) / 0.14) * Math.PI) * latM;
+        if (y >= mouthYMin && y <= mouthYMax && Math.abs(p) < 0.28) {
+          const latM = Math.exp(-0.5 * Math.pow(p / (0.18 * scaleMouthW), 2));
+          const fissureY = -0.27 + shiftMouthY;
+          if (y >= fissureY) {
+            zLips = 0.038 * Math.sin(((y - fissureY) / Math.max(0.01, mouthYMax - fissureY)) * Math.PI) * latM;
+          } else {
+            zLips = 0.042 * Math.sin(((y - mouthYMin) / Math.max(0.01, fissureY - mouthYMin)) * Math.PI) * latM;
+          }
         }
 
-        // 5. Chin (pogonion) centered at y = -0.46
-        const chinYMin = -0.54;
-        const chinYMax = -0.38;
-        if (y >= chinYMin && y <= chinYMax && Math.abs(p) < 0.25) {
+        // 6. Mentolabial crease dip (groove under lower lip)
+        let zCrease = 0.0;
+        const creaseY = -0.40 + shiftMouthY;
+        if (Math.abs(y - creaseY) < 0.05 && Math.abs(p) < 0.24) {
+          zCrease = -0.025 * Math.exp(-0.5 * Math.pow(p / 0.18, 2)) * (1.0 - Math.abs(y - creaseY) / 0.05);
+        }
+
+        // 7. Chin (pogonion projection)
+        let zChin = 0.0;
+        const chinYMin = -0.58;
+        const chinYMax = -0.42;
+        if (y >= chinYMin && y <= chinYMax && Math.abs(p) < 0.24) {
           const latC = Math.exp(-0.5 * Math.pow(p / 0.16, 2));
-          zRelief += 0.030 * Math.sin(((y - chinYMin) / 0.16) * Math.PI) * latC;
+          zChin = 0.060 * Math.sin(((y - chinYMin) / 0.16) * Math.PI) * latC;
         }
-      }
 
-      const z = Math.round((zBase + zRelief) * 10000) / 10000;
-      vertices.push([x, y, z]);
-      isCranial.push(!isFace);
+        z = Math.round((zBase + zNose + zOrbit + zBrow + zCheek + zLips + zCrease + zChin) * 10000) / 10000;
+        isCranial.push(false);
 
-      // UV mapping calibrated to canonical facial proportions
-      if (isFace) {
-        let u = 0.50 + 0.45 * p;
-        let v = 0.55 - 0.75 * y;
+        // UV mapping
+        let u = 0.50 + 0.44 * p;
+        let v = 0.55 - 0.72 * y;
         u = Math.max(0.01, Math.min(0.99, u));
         v = Math.max(0.01, Math.min(0.99, v));
         uvs.push({ u: Math.round(u * 10000) / 10000, v: Math.round(v * 10000) / 10000 });
       } else {
+        // Posterior cranium (smooth occipital dome)
+        z = -Math.round((rzBack * Math.pow(Math.abs(cosP), 0.85)) * 10000) / 10000;
+        isCranial.push(true);
         uvs.push({ u: 0.5, v: 0.5 });
       }
 
-      // Confidence
+      vertices.push([x, y, z]);
+
       let conf = 0.95;
       if (!covered.has("front")) conf = 0.40;
-      if (Math.abs(p) > phiFace * 0.70) {
+      if (Math.abs(p) > 0.85) {
         const sideCovered = (covered.has("left") && p < 0) || (covered.has("right") && p > 0);
         conf = sideCovered ? 0.95 : 0.45;
       }
@@ -581,9 +602,9 @@ export default function FaceMesh3DViewer({
     // Backface culling: polygons facing away from camera are culled to prevent inside-out projection
     if (rnz <= 0.01) return;
 
-    // Check cranial skull volume and lateral cheek facets
-    const isPureCranial = (v0.isCranial ? 1 : 0) + (v1.isCranial ? 1 : 0) + (v2.isCranial ? 1 : 0) >= 2;
-    const isLateral = Math.abs(v0.origX) > 0.38 || Math.abs(v1.origX) > 0.38 || Math.abs(v2.origX) > 0.38;
+    // Pure posterior cranial facets (entirely on back of head behind the ears)
+    const isPureCranial = v0.isCranial && v1.isCranial && v2.isCranial;
+    const isLateral = Math.abs(v0.origX) > 0.34 || Math.abs(v1.origX) > 0.34 || Math.abs(v2.origX) > 0.34;
 
     // Continuous facial surface shading (Lambertian directional lighting)
     const dot = rnx * lnx + rny * lny + rnz * lnz;
@@ -617,15 +638,17 @@ export default function FaceMesh3DViewer({
     if (renderMode === "photo") {
       if (activeTexture) {
         drawTexturedTriangle(ctx, activeTexture, v0, v1, v2, uv0, uv1, uv2, intensity, crop);
-        // If lateral facet without dedicated side profile photo, soften with sampled skin tone overlay
+        // Seamless skin tone blend at lateral boundaries
         if (isLateral && !loadedImages.left && !loadedImages.right) {
           const [psR, psG, psB] = facePalette.skin;
+          const maxDist = Math.max(Math.abs(v0.origX), Math.abs(v1.origX), Math.abs(v2.origX));
+          const blendAlpha = Math.min(0.70, Math.max(0.20, ((maxDist - 0.32) / 0.14) * 0.70));
           ctx.beginPath();
           ctx.moveTo(v0.x, v0.y);
           ctx.lineTo(v1.x, v1.y);
           ctx.lineTo(v2.x, v2.y);
           ctx.closePath();
-          ctx.fillStyle = `rgba(${psR}, ${psG}, ${psB}, 0.45)`;
+          ctx.fillStyle = `rgba(${psR}, ${psG}, ${psB}, ${blendAlpha})`;
           ctx.fill();
         }
       } else {
