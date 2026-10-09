@@ -104,7 +104,7 @@ export default function FaceTab() {
 
   // Compute live 3D models client-side for immediate inspection prior to verification
   const clientModelA = useMemo(() => {
-    if (result?.model_a) return result.model_a;
+    if (result?.model_a && result.model_a.vertices?.length >= 700) return result.model_a;
     if (photosA.length === 0) return null;
     const covered = photosA.map((p) => p.angle);
     const valid = ["front", "left", "right", "up", "down"];
@@ -169,7 +169,7 @@ export default function FaceTab() {
   }, [photosA, result]);
 
   const clientModelB = useMemo(() => {
-    if (result?.model_b) return result.model_b;
+    if (result?.model_b && result.model_b.vertices?.length >= 700) return result.model_b;
     if (photosB.length === 0) return null;
     const covered = photosB.map((p) => p.angle);
     const valid = ["front", "left", "right", "up", "down"];

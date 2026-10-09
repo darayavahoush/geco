@@ -267,51 +267,51 @@ def build_anatomical_face_mesh(
             face_vertex = abs(p) <= phi_face and -0.62 <= y <= 0.52
 
             if face_vertex:
-                # 1. 3D Anatomical Nose (bridge down to tip): realistic subtle protrusion (0.07 to 0.09)
-                nose_ymin = -0.20 + shift_nose_y
-                nose_ymax = 0.20 + shift_nose_y
+                # 1. 3D Anatomical Nose (bridge down to tip): realistic anthropometric protrusion (0.075 max)
+                nose_ymin = -0.16 + shift_nose_y
+                nose_ymax = 0.14 + shift_nose_y
                 if nose_ymin <= y <= nose_ymax:
                     lat_n = math.exp(-0.5 * (p / 0.12) ** 2)
                     nose_tip_y = -0.06 + shift_nose_y
                     if y >= nose_tip_y:
-                        vert_n = 0.04 + 0.045 * ((nose_ymax - y) / max(0.01, nose_ymax - nose_tip_y))
+                        vert_n = 0.03 + 0.045 * ((nose_ymax - y) / max(0.01, nose_ymax - nose_tip_y))
                     else:
-                        vert_n = 0.04 + 0.045 * ((y - nose_ymin) / max(0.01, nose_tip_y - nose_ymin))
-                    z_relief += vert_n * lat_n * min(1.25, max(0.80, scale_nose_z))
+                        vert_n = 0.03 + 0.045 * ((y - nose_ymin) / max(0.01, nose_tip_y - nose_ymin))
+                    z_relief += vert_n * lat_n * min(1.20, max(0.80, scale_nose_z))
 
-                # 2. Orbits (eye sockets)
-                eye_y = 0.18 + shift_eye_y
-                d_eye = math.sqrt(((abs(p) - 0.38 * scale_eye_w) / 0.22) ** 2 + ((y - eye_y) / 0.14) ** 2)
+                # 2. Orbits (eye sockets at y = 0.12)
+                eye_y = 0.12 + shift_eye_y
+                d_eye = math.sqrt(((abs(p) - 0.35 * scale_eye_w) / 0.20) ** 2 + ((y - eye_y) / 0.12) ** 2)
                 if d_eye < 1.0:
-                    z_relief += -0.025 * (1.0 - d_eye ** 2)
+                    z_relief += -0.020 * (1.0 - d_eye ** 2)
 
-                # 3. Brow ridge
-                brow_y = 0.28 + shift_eye_y
-                if abs(y - brow_y) < 0.08 and abs(p) < 0.50:
-                    z_relief += 0.018 * math.exp(-0.5 * (p / 0.35) ** 2) * (1.0 - abs(y - brow_y) / 0.08)
+                # 3. Brow ridge at y = 0.22
+                brow_y = 0.22 + shift_eye_y
+                if abs(y - brow_y) < 0.08 and abs(p) < 0.48:
+                    z_relief += 0.016 * math.exp(-0.5 * (p / 0.35) ** 2) * (1.0 - abs(y - brow_y) / 0.08)
 
-                # 4. Lips
-                mouth_ymin = -0.38 + shift_mouth_y
-                mouth_ymax = -0.22 + shift_mouth_y
-                if mouth_ymin <= y <= mouth_ymax and abs(p) < 0.32:
-                    lat_m = math.exp(-0.5 * (p / (0.18 * scale_mouth_w)) ** 2)
-                    z_relief += 0.022 * math.sin(((y - mouth_ymin) / 0.16) * math.pi) * lat_m
+                # 4. Lips centered at y = -0.25
+                mouth_ymin = -0.32 + shift_mouth_y
+                mouth_ymax = -0.18 + shift_mouth_y
+                if mouth_ymin <= y <= mouth_ymax and abs(p) < 0.30:
+                    lat_m = math.exp(-0.5 * (p / (0.20 * scale_mouth_w)) ** 2)
+                    z_relief += 0.024 * math.sin(((y - mouth_ymin) / 0.14) * math.pi) * lat_m
 
-                # 5. Chin (pogonion)
-                chin_ymin = -0.58
-                chin_ymax = -0.42
-                if chin_ymin <= y <= chin_ymax and abs(p) < 0.26:
+                # 5. Chin (pogonion) centered at y = -0.46
+                chin_ymin = -0.54
+                chin_ymax = -0.38
+                if chin_ymin <= y <= chin_ymax and abs(p) < 0.25:
                     lat_c = math.exp(-0.5 * (p / 0.16) ** 2)
-                    z_relief += 0.032 * math.sin(((y - chin_ymin) / 0.16) * math.pi) * lat_c
+                    z_relief += 0.030 * math.sin(((y - chin_ymin) / 0.16) * math.pi) * lat_c
 
             z = round(z_base + z_relief, 4)
             vertices.append([x, y, z])
             is_cranial.append(not face_vertex)
 
-            # UV mapping directly to facial photo
+            # UV mapping calibrated to canonical facial proportions
             if face_vertex:
-                u = 0.50 + 0.50 * (p / phi_face) * 0.95
-                v = (0.55 - y) / 1.15
+                u = 0.50 + 0.45 * p
+                v = 0.55 - 0.75 * y
                 u = max(0.01, min(0.99, u))
                 v = max(0.01, min(0.99, v))
                 uvs.append({"u": round(u, 4), "v": round(v, 4)})
