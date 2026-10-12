@@ -1,9 +1,9 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 async function smartFetch(path, options = {}) {
   const urls = [
     API_URL ? `${API_URL}${path}` : null,
-    `http://localhost:8000${path}`,
+    `http://127.0.0.1:8000${path}`,
     path,
   ].filter(Boolean);
 
@@ -225,6 +225,15 @@ export async function extractFace(file) {
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(`Face extraction failed: ${detail}`);
+  }
+  return res.json();
+}
+
+export async function reconstruct3DMM(formData) {
+  const res = await smartFetch(`/api/reconstruct-3dmm`, { method: "POST", body: formData });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`3DMM fitting failed (${res.status}): ${detail}`);
   }
   return res.json();
 }

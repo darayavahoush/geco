@@ -740,6 +740,21 @@ async def extract_face(file: UploadFile = File(...)):
         return ExtractFaceResponse(success=False)
 
 
+@app.post("/api/reconstruct-3dmm")
+async def reconstruct_3dmm(file: UploadFile = File(...)):
+    """Fits an anatomically-accurate 3D Morphable Model (3DMM) to the uploaded photo
+    using PyTorch optimization with shape regularization.
+    """
+    try:
+        contents = await file.read()
+        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
+        from geco.face_3dmm import reconstruct_3dmm_from_image
+        result = reconstruct_3dmm_from_image(pil_img)
+        return {"success": True, **result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 _cached_face_samples: list[FaceSampleItem] | None = None
 
 
@@ -752,6 +767,14 @@ async def get_face_samples():
 
     repo_root = Path(__file__).resolve().parent.parent
     sample_defs = [
+        {
+            "id": "emma_stone_test",
+            "title": "Emma Stone (High-Res 3D Test)",
+            "category": "same_person",
+            "description": "User sample photo: High-resolution frontal red-carpet portrait.",
+            "path_a": repo_root / "frontend/public/samples/emma_stone_1.jpg",
+            "path_b": repo_root / "frontend/public/samples/emma_stone_1.jpg",
+        },
         {
             "id": "jackie_chan_same",
             "title": "Jackie Chan",

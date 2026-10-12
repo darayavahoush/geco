@@ -232,43 +232,43 @@ def build_anatomical_face_mesh(
     vertices = []
     uvs = []
     confidences = []
-    is_cranial = []
+    z_center = -0.06
 
-    # 1. Top Pole Vertex (Smooth cranial apex dome)
-    top_y = round(0.42 * scale_face_h, 4)
-    vertices.append([0.0, top_y, 0.0])
+    # 1. Top Pole Vertex (Smooth cranial apex, crown of head)
+    top_y = round(0.44 * scale_face_h, 4)
+    vertices.append([0.0, top_y, z_center])
     uvs.append({"u": 0.50, "v": 0.01})
     confidences.append(0.95 if "front" in covered else 0.40)
     is_cranial.append(True)
 
     # 2. Intermediate Ring Vertices
     for j in range(1, n_lat - 1):
-        phi = phis[j]
-        y = round(0.42 * math.cos(phi) * scale_face_h, 4)
+        phi = math.pi * j / (n_lat - 1)
+        cos_phi = math.cos(phi)
+        sin_phi = math.sin(phi)
 
-        if y >= 0:
-            s = math.sqrt(max(0.01, 1.0 - (y / 0.45) ** 2))
-            rx = 0.32 * s
-            rz_f = 0.28 * s
-            rz_b = 0.36 * s
-        else:
-            prog = -y / 0.42
-            taper = (1.0 - 0.26 * (prog ** 1.1)) * scale_jaw_w
-            rx = 0.32 * taper
-            rz_f = 0.28 * (1.0 - 0.18 * prog)
-            rz_b = 0.36 * (1.0 - 0.32 * prog)
+        y = round(0.42 * cos_phi * scale_face_h, 4)
+
+        rx_base = 0.30 * sin_phi
+        rz_base = 0.28 * sin_phi
+
+        if y < 0:
+            prog = -y / (0.42 * scale_face_h)
+            taper = (1.0 - 0.20 * (prog ** 1.1)) * scale_jaw_w
+            rx_base = 0.30 * sin_phi * taper
+            rz_base = 0.28 * sin_phi * (1.0 - 0.12 * prog)
 
         for i in range(n_lon):
-            th = thetas[i]
+            th = -math.pi + 2.0 * math.pi * i / n_lon
             sin_t = math.sin(th)
             cos_t = math.cos(th)
 
-            x = round(rx * sin_t, 4)
+            x = round(rx_base * sin_t, 4)
+            z_ellipsoid = z_center + rz_base * cos_t
 
-            if cos_t >= 0:
+            dz = 0.0
+            if cos_t > 0:
                 # Anterior facial features
-                z_base = rz_f * (cos_t ** 0.85)
-
                 # 3D Nose
                 z_nose = 0.0
                 nose_ymin = -0.14 + shift_nose_y
@@ -278,10 +278,10 @@ def build_anatomical_face_mesh(
                     nose_tip_y = -0.04 + shift_nose_y
                     if y >= nose_tip_y:
                         prog_n = (nose_ymax - y) / max(0.01, nose_ymax - nose_tip_y)
-                        vert_n = 0.015 + 0.075 * (prog_n ** 0.9)
+                        vert_n = 0.012 + 0.065 * (prog_n ** 0.9)
                     else:
                         prog_n = (y - nose_ymin) / max(0.01, nose_tip_y - nose_ymin)
-                        vert_n = 0.015 + 0.075 * (prog_n ** 1.1)
+                        vert_n = 0.012 + 0.065 * (prog_n ** 1.1)
                     z_bridge = vert_n * lat_n * min(1.25, max(0.80, scale_nose_z))
 
                     # Nostril wings
@@ -290,7 +290,7 @@ def build_anatomical_face_mesh(
                     if -0.11 <= y <= -0.02 and 0.03 <= abs(x) <= 0.08:
                         d_ala = math.sqrt(((abs(x) - 0.05) / 0.03) ** 2 + ((y - alar_y) / 0.035) ** 2)
                         if d_ala < 1.0:
-                            z_ala = 0.020 * (1.0 - d_ala ** 2)
+                            z_ala = 0.016 * (1.0 - d_ala ** 2)
 
                     z_nose = z_bridge + z_ala
 
@@ -299,20 +299,20 @@ def build_anatomical_face_mesh(
                 eye_y = 0.07 + shift_eye_y
                 d_eye = math.sqrt(((abs(x) - 0.14 * scale_eye_w) / 0.07) ** 2 + ((y - eye_y) / 0.05) ** 2)
                 if d_eye < 1.0:
-                    z_orbit = -0.020 * (1.0 - d_eye ** 2)
+                    z_orbit = -0.018 * (1.0 - d_eye ** 2)
 
                 # Brow ridge
                 z_brow = 0.0
                 brow_y = 0.13 + shift_eye_y
                 if abs(y - brow_y) < 0.035 and abs(x) < 0.20:
-                    z_brow = 0.018 * math.exp(-0.5 * (x / 0.13) ** 2) * (1.0 - abs(y - brow_y) / 0.035)
+                    z_brow = 0.015 * math.exp(-0.5 * (x / 0.13) ** 2) * (1.0 - abs(y - brow_y) / 0.035)
 
                 # Cheekbones
                 z_cheek = 0.0
                 cheek_y = 0.02 + shift_eye_y
                 d_cheek = math.sqrt(((abs(x) - 0.18) / 0.06) ** 2 + ((y - cheek_y) / 0.05) ** 2)
                 if d_cheek < 1.0:
-                    z_cheek = 0.020 * (1.0 - d_cheek ** 2)
+                    z_cheek = 0.016 * (1.0 - d_cheek ** 2)
 
                 # Lips
                 z_lips = 0.0
@@ -322,29 +322,34 @@ def build_anatomical_face_mesh(
                     lat_m = math.exp(-0.5 * (x / (0.07 * scale_mouth_w)) ** 2)
                     fiss_y = -0.19 + shift_mouth_y
                     if y >= fiss_y:
-                        z_lips = 0.020 * math.sin(((y - fiss_y) / max(0.01, mouth_ymax - fiss_y)) * math.pi) * lat_m
+                        z_lips = 0.016 * math.sin(((y - fiss_y) / max(0.01, mouth_ymax - fiss_y)) * math.pi) * lat_m
                     else:
-                        z_lips = 0.022 * math.sin(((y - mouth_ymin) / max(0.01, fiss_y - mouth_ymin)) * math.pi) * lat_m
+                        z_lips = 0.018 * math.sin(((y - mouth_ymin) / max(0.01, fiss_y - mouth_ymin)) * math.pi) * lat_m
 
                 # Chin (pogonion)
                 z_chin = 0.0
                 if -0.38 <= y <= -0.27 and abs(x) < 0.10:
                     lat_c = math.exp(-0.5 * (x / 0.07) ** 2)
-                    z_chin = 0.030 * math.sin(((y - (-0.38)) / 0.11) * math.pi) * lat_c
+                    z_chin = 0.024 * math.sin(((y - (-0.38)) / 0.11) * math.pi) * lat_c
 
-                z = round(z_base + z_nose + z_orbit + z_brow + z_cheek + z_lips + z_chin, 4)
-                is_cranial.append(False)
+                dz = (z_nose + z_orbit + z_brow + z_cheek + z_lips + z_chin) * (cos_t ** 0.7)
 
-                # Planar orthographic UV projection aligned to frontal camera frame
-                u = round(max(0.01, min(0.99, 0.50 + x / 0.60)), 4)
-                v = round(max(0.01, min(0.99, 0.50 - y / 0.76)), 4)
-                uvs.append({"u": u, "v": v})
-            else:
-                z = round(-rz_b * (abs(cos_t) ** 0.85), 4)
-                is_cranial.append(True)
-                uvs.append({"u": 0.50, "v": 0.50})
-
+            z = round(z_ellipsoid + dz, 4)
             vertices.append([x, y, z])
+
+            if cos_t >= 0:
+                u = round(max(0.01, min(0.99, 0.50 + x / 0.58)), 4)
+                v = round(max(0.01, min(0.99, 0.50 - y / 0.74)), 4)
+            else:
+                side_factor = abs(sin_t)
+                u_back = (0.04 + 0.46 * (1.0 - side_factor)) if sin_t < 0 else (0.96 - 0.46 * (1.0 - side_factor))
+                u = round(max(0.01, min(0.99, u_back)), 4)
+                v_hair = 0.04 + 0.14 * (1.0 - cos_phi)
+                v = round(max(0.02, min(0.24, v_hair)), 4)
+            uvs.append({"u": u, "v": v})
+
+            cranial_flag = cos_t < 0.10 or y > 0.22
+            is_cranial.append(cranial_flag)
 
             conf = 0.95 if "front" in covered else 0.40
             if abs(th) > 0.85:
@@ -352,10 +357,10 @@ def build_anatomical_face_mesh(
                 conf = 0.95 if side_covered else 0.45
             confidences.append(round(conf, 2))
 
-    # 3. Bottom Pole Vertex (Smooth submental jawline/chin apex)
+    # 3. Bottom Pole Vertex (Smooth cervical spine / neck column base)
     bot_y = round(-0.42 * scale_face_h, 4)
-    vertices.append([0.0, bot_y, 0.0])
-    uvs.append({"u": 0.50, "v": 0.99})
+    vertices.append([0.0, bot_y, z_center])
+    uvs.append({"u": 0.50, "v": 0.98})
     confidences.append(0.95 if "front" in covered else 0.40)
     is_cranial.append(True)
 
@@ -384,7 +389,7 @@ def build_anatomical_face_mesh(
         i_next = (i + 1) % n_lon
         triangles.append([bot_pole, last_r + i_next, last_r + i])
 
-    # 5. Compute Unit Normals from Incident Face Normals
+    # 5. Compute Unit Normals (enforcing outward radial normals for cranial vault)
     normals = [[0.0, 0.0, 0.0] for _ in range(total_verts)]
     for a, b, c in triangles:
         va, vb, vc = vertices[a], vertices[b], vertices[c]
@@ -399,8 +404,16 @@ def build_anatomical_face_mesh(
             normals[idx][2] += fnz
 
     for i in range(total_verts):
-        l = math.hypot(normals[i][0], normals[i][1], normals[i][2]) or 1.0
-        normals[i] = [round(normals[i][0] / l, 4), round(normals[i][1] / l, 4), round(normals[i][2] / l, 4)]
+        if is_cranial[i]:
+            v = vertices[i]
+            dx = v[0] - 0.0
+            dy = v[1] - 0.06
+            dz = v[2] - (-0.10)
+            l = math.hypot(dx, dy, dz) or 1.0
+            normals[i] = [round(dx / l, 4), round(dy / l, 4), round(dz / l, 4)]
+        else:
+            l = math.hypot(normals[i][0], normals[i][1], normals[i][2]) or 1.0
+            normals[i] = [round(normals[i][0] / l, 4), round(normals[i][1] / l, 4), round(normals[i][2] / l, 4)]
 
     return vertices, triangles, confidences, uvs, is_cranial, normals
 
