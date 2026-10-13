@@ -1,0 +1,413 @@
+{
+ "n_images": 57,
+ "n_identities": 13,
+ "n_same_pairs_exhaustive": 119,
+ "n_diff_pairs_exhaustive": 1477,
+ "icc": {
+  "face_width": {
+   "icc": 0.5914189421321405,
+   "lo": 0.2990353658861148,
+   "hi": 0.7310197402238934
+  },
+  "face_height": {
+   "icc": 0.25342071197747273,
+   "lo": -0.07729664980281883,
+   "hi": 0.5055511876651798
+  },
+  "jaw_width": {
+   "icc": 0.5431521400427768,
+   "lo": 0.27597515086211116,
+   "hi": 0.7159893544800388
+  },
+  "chin_height": {
+   "icc": 0.3255775793379989,
+   "lo": 0.03032203252931413,
+   "hi": 0.5321420984457965
+  },
+  "eye_width": {
+   "icc": 0.1342357555632262,
+   "lo": -0.15409532101789092,
+   "hi": 0.6220268881975832
+  },
+  "eye_opening": {
+   "icc": 0.16716968533369872,
+   "lo": -0.14899427804728585,
+   "hi": 0.42544833537240606
+  },
+  "intercanthal_width": {
+   "icc": 0.2447872099391344,
+   "lo": -0.08264985552928943,
+   "hi": 0.6438718029706603
+  },
+  "biocular_width": {
+   "icc": 0.17720179558116053,
+   "lo": -0.16551188581938225,
+   "hi": 0.7227243060859041
+  },
+  "canthal_tilt": {
+   "icc": 0.5896268739600967,
+   "lo": 0.24713116080125913,
+   "hi": 0.7553393514814442
+  },
+  "brow_eye_distance": {
+   "icc": 0.5947656723616893,
+   "lo": 0.20615202972570548,
+   "hi": 0.7466808188459042
+  },
+  "nose_width": {
+   "icc": 0.26695200716280715,
+   "lo": -0.07404126857511406,
+   "hi": 0.5547873077613366
+  },
+  "nose_length": {
+   "icc": 0.06454544721670623,
+   "lo": -0.18013377491075533,
+   "hi": 0.46457283602801236
+  },
+  "nose_projection": {
+   "icc": 0.226840758784824,
+   "lo": -0.009688885209486135,
+   "hi": 0.5097096977486549
+  },
+  "mouth_width": {
+   "icc": 0.3238429214920319,
+   "lo": 0.006777971230299764,
+   "hi": 0.6323406088873945
+  },
+  "upper_lip_thickness": {
+   "icc": 0.27740008981036635,
+   "lo": 0.015441301410846781,
+   "hi": 0.5413875210115394
+  },
+  "lower_lip_thickness": {
+   "icc": 0.36775975646244485,
+   "lo": 0.12799464384975523,
+   "hi": 0.5255808880600702
+  },
+  "philtrum_length": {
+   "icc": 0.3978536756863712,
+   "lo": 0.14130722430986942,
+   "hi": 0.5436139155516003
+  },
+  "mouth_corner_tilt": {
+   "icc": 0.3412309625000219,
+   "lo": 0.010284655140437872,
+   "hi": 0.6637872605185775
+  },
+  "face_aspect_ratio": {
+   "icc": 0.3603401627462975,
+   "lo": 0.05222170021083167,
+   "hi": 0.5408624430880423
+  }
+ },
+ "calibration": {
+  "same_person_fpr_abs_z_gt_1_96": 0.07518796992481203,
+  "same_person_fpr_abs_z_gt_2_58": 0.022114108801415303,
+  "nominal_1_96": 0.05,
+  "nominal_2_58": 0.01,
+  "same_pairs_with_any_bh_flag": 0.1092436974789916,
+  "diff_pairs_with_any_bh_flag": 0.17332430602572782,
+  "mean_flags_same": 0.3277310924369748,
+  "mean_flags_diff": 0.3933649289099526
+ },
+ "per_feature_flag_rate": {
+  "face_width": {
+   "same": 0.01680672268907563,
+   "diff": 0.08733920108327692
+  },
+  "face_height": {
+   "same": 0.0,
+   "diff": 0.004062288422477996
+  },
+  "jaw_width": {
+   "same": 0.05042016806722689,
+   "diff": 0.052132701421800945
+  },
+  "chin_height": {
+   "same": 0.0,
+   "diff": 0.012186865267433988
+  },
+  "eye_width": {
+   "same": 0.04201680672268908,
+   "diff": 0.037237643872714964
+  },
+  "eye_opening": {
+   "same": 0.03361344537815126,
+   "diff": 0.010832769126607989
+  },
+  "intercanthal_width": {
+   "same": 0.04201680672268908,
+   "diff": 0.025727826675693975
+  },
+  "biocular_width": {
+   "same": 0.01680672268907563,
+   "diff": 0.016926201760324982
+  },
+  "canthal_tilt": {
+   "same": 0.03361344537815126,
+   "diff": 0.07718348002708192
+  },
+  "brow_eye_distance": {
+   "same": 0.03361344537815126,
+   "diff": 0.06635071090047394
+  },
+  "nose_width": {
+   "same": 0.01680672268907563,
+   "diff": 0.016249153689911984
+  },
+  "nose_length": {
+   "same": 0.04201680672268908,
+   "diff": 0.015572105619498984
+  },
+  "nose_projection": {
+   "same": 0.04201680672268908,
+   "diff": 0.03994583615436696
+  },
+  "mouth_width": {
+   "same": 0.0,
+   "diff": 0.012863913337846988
+  },
+  "upper_lip_thickness": {
+   "same": 0.0,
+   "diff": 0.003385240352064997
+  },
+  "lower_lip_thickness": {
+   "same": 0.03361344537815126,
+   "diff": 0.03926878808395396
+  },
+  "philtrum_length": {
+   "same": 0.008403361344537815,
+   "diff": 0.03994583615436696
+  },
+  "mouth_corner_tilt": {
+   "same": 0.0,
+   "diff": 0.004739336492890996
+  },
+  "face_aspect_ratio": {
+   "same": 0.008403361344537815,
+   "diff": 0.025727826675693975
+  }
+ },
+ "min_detectable_difference": {
+  "face_width": "7.6%",
+  "face_height": "39.3%",
+  "jaw_width": "17.0%",
+  "chin_height": "87.3%",
+  "eye_width": "39.2%",
+  "eye_opening": "5.4% of face width",
+  "intercanthal_width": "34.1%",
+  "biocular_width": "36.9%",
+  "canthal_tilt": "3.6 deg",
+  "brow_eye_distance": "3.2% of face width",
+  "nose_width": "24.3%",
+  "nose_length": "37.5%",
+  "nose_projection": "4.5% of face width",
+  "mouth_width": "40.8%",
+  "upper_lip_thickness": "2.4% of face width",
+  "lower_lip_thickness": "2.4% of face width",
+  "philtrum_length": "3.8% of face width",
+  "mouth_corner_tilt": "18.7 deg",
+  "face_aspect_ratio": "39.2%"
+ },
+ "noise_model": {
+  "face_width": {
+   "df": 12.212116428488448,
+   "scale": 0.023971732341684263
+  },
+  "face_height": {
+   "df": 1.7634323907086065,
+   "scale": 0.026512371960274485
+  },
+  "jaw_width": {
+   "df": 3.452759984166214,
+   "scale": 0.030547345676168118
+  },
+  "chin_height": {
+   "df": 2.790065293130297,
+   "scale": 0.09960180324368201
+  },
+  "eye_width": {
+   "df": 1.66544340333125,
+   "scale": 0.023551780039638374
+  },
+  "eye_opening": {
+   "df": 3.6352884760694906,
+   "scale": 0.010923329761587277
+  },
+  "intercanthal_width": {
+   "df": 1.5,
+   "scale": 0.01648575803766964
+  },
+  "biocular_width": {
+   "df": 1.5,
+   "scale": 0.017611798920411738
+  },
+  "canthal_tilt": {
+   "df": 8.550274375925504,
+   "scale": 1.0873456874398135
+  },
+  "brow_eye_distance": {
+   "df": 8.58211494779991,
+   "scale": 0.009711537589528613
+  },
+  "nose_width": {
+   "df": 8.000125977472027,
+   "scale": 0.06491874546108559
+  },
+  "nose_length": {
+   "df": 2.037380232278993,
+   "scale": 0.033125906198764904
+  },
+  "nose_projection": {
+   "df": 2.549202550590659,
+   "scale": 0.006413642584588205
+  },
+  "mouth_width": {
+   "df": 60.57445835088227,
+   "scale": 0.12855638032837682
+  },
+  "upper_lip_thickness": {
+   "df": 2.9397296352138076,
+   "scale": 0.004034134920396178
+  },
+  "lower_lip_thickness": {
+   "df": 4.163546875560891,
+   "scale": 0.005439831433681607
+  },
+  "philtrum_length": {
+   "df": 200.0,
+   "scale": 0.014587227445187263
+  },
+  "mouth_corner_tilt": {
+   "df": 1.9282796920665861,
+   "scale": 1.7675880286785168
+  },
+  "face_aspect_ratio": {
+   "df": 2.427036726169403,
+   "scale": 0.04445286798777656
+  }
+ },
+ "config": {
+  "tta": 16,
+  "noise": "t"
+ },
+ "discrimination": {
+  "geometry_rms_z": {
+   "auc": 0.7249896671849475,
+   "ci": [
+    0.666481824086284,
+    0.7794313015410655
+   ]
+  },
+  "geometry_mahalanobis": {
+   "auc": 0.7107992678462477,
+   "ci": [
+    0.6514825129406208,
+    0.7646445511621954
+   ]
+  },
+  "feature:face_width": {
+   "auc": 0.6323092365525793
+  },
+  "feature:face_height": {
+   "auc": 0.5733629868724045
+  },
+  "feature:jaw_width": {
+   "auc": 0.6736404967623846
+  },
+  "feature:chin_height": {
+   "auc": 0.6161113188608317
+  },
+  "feature:eye_width": {
+   "auc": 0.6418547895057962
+  },
+  "feature:eye_opening": {
+   "auc": 0.583951662107107
+  },
+  "feature:intercanthal_width": {
+   "auc": 0.6695860969513275
+  },
+  "feature:biocular_width": {
+   "auc": 0.6762187801373772
+  },
+  "feature:canthal_tilt": {
+   "auc": 0.6141628451652267
+  },
+  "feature:brow_eye_distance": {
+   "auc": 0.6482119309571139
+  },
+  "feature:nose_width": {
+   "auc": 0.586903894979236
+  },
+  "feature:nose_length": {
+   "auc": 0.6270739435926705
+  },
+  "feature:nose_projection": {
+   "auc": 0.5242181503276978
+  },
+  "feature:mouth_width": {
+   "auc": 0.6055423251786101
+  },
+  "feature:upper_lip_thickness": {
+   "auc": 0.6616937944065028
+  },
+  "feature:lower_lip_thickness": {
+   "auc": 0.637544529512488
+  },
+  "feature:philtrum_length": {
+   "auc": 0.5763939459544569
+  },
+  "feature:mouth_corner_tilt": {
+   "auc": 0.6509476667519534
+  },
+  "feature:face_aspect_ratio": {
+   "auc": 0.5755870023027416
+  },
+  "baseline:DeepFace_cosine": {
+   "auc": 0.7088268043324223,
+   "ci": [
+    0.6299321793703816,
+    0.7856754226136249
+   ],
+   "n": 200
+  },
+  "baseline:Facenet_cosine": {
+   "auc": 1.0,
+   "ci": [
+    1.0,
+    1.0
+   ],
+   "n": 200
+  },
+  "baseline:OpenFace_cosine": {
+   "auc": 0.759945338597024,
+   "ci": [
+    0.6950551675270776,
+    0.8275053143030671
+   ],
+   "n": 200
+  },
+  "baseline:VGG-Face_cosine": {
+   "auc": 0.987448122279583,
+   "ci": [
+    0.9701563923474036,
+    0.9972188480615447
+   ],
+   "n": 200
+  },
+  "geometry_rms_z_exhaustive": {
+   "auc": 0.738522897310583,
+   "ci": [
+    0.6845928892884168,
+    0.7934246684455772
+   ],
+   "n_same": 119,
+   "n_diff": 1477
+  }
+ },
+ "n_benchmark_pairs": {
+  "same": 149,
+  "different": 341
+ },
+ "n_benchmark_images_after_gate": 57
+}

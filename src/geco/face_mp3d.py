@@ -16,24 +16,35 @@ from .face_align import extract_face_bbox_and_crop
 _HERE=Path(__file__).resolve().parent
 MODEL_DIR=Path(os.environ.get("GECO_MP_MODELS", _HERE.parent.parent/"models"/"mediapipe"))
 _it=None
-def landmarks468(rgb, bbox):
-    """MediaPipe face_landmark.tflite on a square crop around the YuNet bbox. Returns [468,3] in image px (z in px-scale)."""
+def landmarks468(rgb, bbox, scale=1.5, shift=(0.0, 0.0), rot=0.0, flip=False):
+    """MediaPipe face_landmark.tflite on a square crop around the YuNet bbox.
+    Returns ([468,3] in image px (z in px-scale), presence logit). ``scale/shift/rot/flip`` are test-time jitters."""
     global _it
     from ai_edge_litert.interpreter import Interpreter
     if _it is None:
-        _it=Interpreter(model_path=str(MODEL_DIR/'face_landmark.tflite')); _it.allocate_tensors()
-    h,w=rgb.shape[:2]; x,y,bw,bh=bbox
-    cx,cy=x+bw/2,y+bh/2; s=max(bw,bh)*1.5
-    M=np.array([[192/s,0,192/2-cx*192/s],[0,192/s,192/2-cy*192/s]],np.float32)
-    crop=cv2.warpAffine(rgb,M,(192,192),flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_REPLICATE)
-    inp=(crop.astype(np.float32)/255.)[None]
-    _it.set_tensor(_it.get_input_details()[0]['index'],inp); _it.invoke()
-    out=_it.get_tensor(_it.get_output_details()[0]['index']).reshape(468,3)
-    score=float(_it.get_tensor(_it.get_output_details()[1]['index']).ravel()[0])
-    Mi=cv2.invertAffineTransform(M)
-    xy=out[:,:2]@Mi[:,:2].T+Mi[:,2]
-    z=out[:,2]*(s/192)
-    return np.c_[xy,z].astype(np.float32), score
+        _it = Interpreter(model_path=str(MODEL_DIR / 'face_landmark.tflite')); _it.allocate_tensors()
+    h, w = rgb.shape[:2]; x, y, bw, bh = bbox
+    if flip: rgb = np.ascontiguousarray(rgb[:, ::-1]); x = w - x - bw
+    cx, cy = x + bw / 2 + shift[0] * bw, y + bh / 2 + shift[1] * bh; s = max(bw, bh) * scale
+    M = cv2.getRotationMatrix2D((cx, cy), rot, 192 / s).astype(np.float32); M[:, 2] += (96 - cx, 96 - cy)
+    crop = cv2.warpAffine(rgb, M, (192, 192), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    _it.set_tensor(_it.get_input_details()[0]['index'], (crop.astype(np.float32) / 255.)[None]); _it.invoke()
+    out = _it.get_tensor(_it.get_output_details()[0]['index']).reshape(468, 3)
+    score = float(_it.get_tensor(_it.get_output_details()[1]['index']).ravel()[0])
+    Mi = cv2.invertAffineTransform(M); xy = out[:, :2] @ Mi[:, :2].T + Mi[:, 2]; z = out[:, 2] * (s / 192)
+    P = np.c_[xy, z].astype(np.float32)
+    if flip: P[:, 0] = (w - 1) - P[:, 0]; P = P[MIRROR]          # un-mirror coordinates AND landmark identities
+    return P, score
+
+
+def landmarks468_tta(rgb, bbox, n=16, seed=0):
+    """Average of n jittered passes (scale, shift, in-plane rotation, horizontal flip): reduces detector noise."""
+    rng = np.random.default_rng(seed); Ps = []; sc = []
+    for k in range(n):
+        P, s_ = landmarks468(rgb, bbox, scale=float(rng.uniform(1.4, 1.6)), shift=tuple(rng.uniform(-0.04, 0.04, 2)),
+                             rot=float(rng.uniform(-6, 6)), flip=bool(k % 2))
+        Ps.append(P); sc.append(s_)
+    return np.mean(Ps, 0), float(np.mean(sc))
 
 
 D=json.load(open(_HERE/'canonical_head_mesh.json'))
@@ -42,6 +53,11 @@ CRAN=np.zeros(len(CV),bool); CRAN[468:]=True
 BACK=CRAN&(CV[:,2]<=-0.02)          # true skull verts
 FILL=CRAN&~BACK                      # 3 centroid verts that close eyes+mouth (belong to the face)
 CAN468=CV[:468]
+def _mirror_map():
+    m = CAN468 * np.array([-1, 1, 1], np.float32); d = ((m[:, None] - CAN468[None]) ** 2).sum(-1); j = d.argmin(1)
+    assert (j[j] == np.arange(468)).all() and np.sqrt(d.min(1)).max() < 5e-3, 'canonical mesh is not mirror symmetric'
+    return j
+MIRROR=_mirror_map()
 
 def umeyama(src,dst):
     mu_s,mu_d=src.mean(0),dst.mean(0); S=src-mu_s; Dd=dst-mu_d
@@ -81,10 +97,10 @@ def euler(R):
     yaw=np.degrees(np.arcsin(np.clip(R[0,2],-1,1))); pitch=np.degrees(np.arctan2(-R[1,2],R[2,2])); roll=np.degrees(np.arctan2(-R[0,1],R[0,0]))
     return dict(yaw=float(yaw),pitch=float(pitch),roll=float(roll))
 
-def reconstruct(img: Image.Image) -> dict:
+def reconstruct(img: Image.Image, tta: int = 0) -> dict:
     rgb=np.array(img.convert('RGB')); h,w=rgb.shape[:2]
     _,meta=extract_face_bbox_and_crop(img.convert('RGB'))
-    P,score=landmarks468(rgb,meta['bbox'])
+    P,score=(landmarks468_tta(rgb,meta['bbox'],tta) if tta else landmarks468(rgb,meta['bbox']))
     obs=np.c_[P[:,0],-P[:,1],-P[:,2]].astype(np.float64)           # x right, y up, z toward camera
     R,s,t=umeyama(CAN468.astype(np.float64),obs)
     G=((obs-t)@R)/s                                                  # person-specific shape, pose-normalised (frontal)
