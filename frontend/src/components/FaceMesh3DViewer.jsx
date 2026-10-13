@@ -409,6 +409,41 @@ async function drainMediaPipeQueue() {
   }
 }
 
+// Least-squares 2D similarity (scale + rotation + translation) from the canonical mesh's eyes/nose/mouth
+// to the detector's 5 face landmarks. Used to register the photo texture to the template when no
+// MediaPipe landmarks are available (bbox-only mapping misplaced features by up to ~0.3 eye distances).
+const _LE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+const _RE = [263, 466, 388, 387, 386, 385, 384, 398, 362, 382, 381, 380, 374, 373, 390, 249];
+function fitCanonicalToLandmarks(lm) {
+  if (!lm || !lm.left_eye || !lm.right_eye || !lm.nose_tip || !lm.left_mouth || !lm.right_mouth) return null;
+  const cen = (ids) => [
+    ids.reduce((a, i) => a + canonicalLandmarks[i][0], 0) / ids.length,
+    -ids.reduce((a, i) => a + canonicalLandmarks[i][1], 0) / ids.length,
+  ];
+  const src = [
+    cen(_LE), cen(_RE),
+    [canonicalLandmarks[1][0], -canonicalLandmarks[1][1]],
+    [canonicalLandmarks[61][0], -canonicalLandmarks[61][1]],
+    [canonicalLandmarks[291][0], -canonicalLandmarks[291][1]],
+  ];
+  const dst = [lm.left_eye, lm.right_eye, lm.nose_tip, lm.left_mouth, lm.right_mouth];
+  const n = src.length;
+  const ms = [src.reduce((a, p) => a + p[0], 0) / n, src.reduce((a, p) => a + p[1], 0) / n];
+  const md = [dst.reduce((a, p) => a + p[0], 0) / n, dst.reduce((a, p) => a + p[1], 0) / n];
+  // complex least squares: z = sum(conj(a) * b) / sum(|a|^2)
+  let re = 0, im = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    const ax = src[i][0] - ms[0], ay = src[i][1] - ms[1];
+    const bx = dst[i][0] - md[0], by = dst[i][1] - md[1];
+    re += ax * bx + ay * by;
+    im += ax * by - ay * bx;
+    den += ax * ax + ay * ay;
+  }
+  if (den < 1e-12) return null;
+  const zr = re / den, zi = im / den;
+  return { zr, zi, tx: md[0] - (zr * ms[0] - zi * ms[1]), ty: md[1] - (zi * ms[0] + zr * ms[1]) };
+}
+
 /**
  * Builds an authentic, anatomically sculpted human face mesh anchored to the 468 canonical
  * metric landmark coordinates with cranial vault enclosure (watertight 2-manifold, 613 vertices, 1176 polygons).
@@ -429,6 +464,7 @@ function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front"], ove
     scaleY = Math.max(0.92, Math.min(1.10, 0.85 / Math.max(0.5, aspect)));
   }
 
+  const lmFit = faceMeta ? fitCanonicalToLandmarks(faceMeta.landmarks) : null;
   const vertices = [];
   const uvs = [];
   const confidences = [];
@@ -444,6 +480,14 @@ function buildAnatomicalFaceMesh(faceMeta = null, coveredAngles = ["front"], ove
 
     if (overrideUvs && overrideUvs[i]) {
       uvs.push({ u: overrideUvs[i].u, v: overrideUvs[i].v });
+    } else if (lmFit && imgW > 0 && imgH > 0) {
+      const X = p[0], Y = -p[1];
+      const mu = (lmFit.zr * X - lmFit.zi * Y + lmFit.tx) / imgW;
+      const mv = (lmFit.zi * X + lmFit.zr * Y + lmFit.ty) / imgH;
+      uvs.push({
+        u: round4(Math.max(0.001, Math.min(0.999, mu))),
+        v: round4(Math.max(0.001, Math.min(0.999, mv))),
+      });
     } else if (faceMeta && faceMeta.bbox && imgW > 0 && imgH > 0) {
       const [bx, by, bw, bh] = faceMeta.bbox;
       const mu = (bx + p[3] * bw) / imgW;
