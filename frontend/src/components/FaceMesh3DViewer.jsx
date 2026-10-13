@@ -875,7 +875,7 @@ function mat4ModelView(yaw, pitch, distance, targetY = 0) {
   return [
     cy, sp * sy, cp * sy, 0,
     0, cp, -sp, 0,
-    -sy, -sp * cy, cp * cy, 0,
+    -sy, sp * cy, cp * cy, 0,
     0, targetY, -distance, 1,
   ];
 }
