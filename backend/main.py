@@ -24,6 +24,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
@@ -78,6 +79,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request, exc: Exception):
+    """Return unexpected errors as JSON *with* CORS headers.
+
+    Starlette's server-error layer sits outside CORSMiddleware, so a bare 500 reaches the browser without
+    Access-Control-Allow-Origin and shows up as a misleading "blocked by CORS policy". This keeps the real
+    error visible (and still logs the traceback in the terminal).
+    """
+    import logging
+    import traceback
+
+    logging.getLogger("uvicorn.error").error(
+        "Unhandled error on %s %s\n%s", request.method, request.url.path,
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
 
 _model = None
 _device = None

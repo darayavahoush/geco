@@ -232,6 +232,7 @@ def build_anatomical_face_mesh(
     vertices = []
     uvs = []
     confidences = []
+    is_cranial: list[bool] = []
     z_center = -0.06
 
     # 1. Top Pole Vertex (Smooth cranial apex, crown of head)
@@ -414,8 +415,6 @@ def build_anatomical_face_mesh(
         else:
             l = math.hypot(normals[i][0], normals[i][1], normals[i][2]) or 1.0
             normals[i] = [round(normals[i][0] / l, 4), round(normals[i][1] / l, 4), round(normals[i][2] / l, 4)]
-
-    return vertices, triangles, confidences, uvs, is_cranial, normals
 
     return vertices, triangles, confidences, uvs, is_cranial, normals
 
