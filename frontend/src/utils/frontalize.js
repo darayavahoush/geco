@@ -59,7 +59,9 @@ export function frontalizeLandmarks(landmarks, w, h, canonical) {
   const { R, s, t } = fitSimilarity3D(can, obs);
   const verts = obs.map((o) => { const d = [o[0] - t[0], o[1] - t[1], o[2] - t[2]];
     return [0, 1, 2].map((k) => (R[0][k] * d[0] + R[1][k] * d[1] + R[2][k] * d[2]) / s); });        // R^T (obs - t) / s
+  let ss = 0; for (let i = 0; i < n; i++) ss += (verts[i][0] - can[i][0]) ** 2 + (verts[i][1] - can[i][1]) ** 2 + (verts[i][2] - can[i][2]) ** 2;
+  const rms = Math.sqrt(ss / n);                      // how far the person's frontal shape is from the template (canonical units)
   const deg = (r) => (r * 180) / Math.PI;
   const pose = { yaw: deg(Math.asin(Math.max(-1, Math.min(1, R[0][2])))), pitch: deg(Math.atan2(-R[1][2], R[2][2])), roll: deg(Math.atan2(-R[0][1], R[0][0])) };
-  return { verts, pose, s };
+  return { verts, pose, s, rms };
 }

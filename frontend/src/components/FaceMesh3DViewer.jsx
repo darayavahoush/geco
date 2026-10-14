@@ -42,6 +42,20 @@ function buildMeshFromMediaPipeLandmarks(landmarks, imgWidth = 1, imgHeight = 1)
   // were taken from the posed photo but z from the generic frontal template, which sheared the mesh on any non-frontal photo.)
   const fr = frontalizeLandmarks(landmarks, w, h, canonicalLandmarks);
 
+  // Diagnostics: open the browser console and look for "[GECO viewer]" to see exactly what the detector delivered.
+  try {
+    const zs = landmarks.slice(0, 468).map((q) => q.z || 0);
+    console.info("[GECO viewer] landmarks -> mesh", {
+      image: [w, h],
+      xRange: [Math.min(...landmarks.slice(0, 468).map((q) => q.x)), Math.max(...landmarks.slice(0, 468).map((q) => q.x))],
+      yRange: [Math.min(...landmarks.slice(0, 468).map((q) => q.y)), Math.max(...landmarks.slice(0, 468).map((q) => q.y))],
+      zRange: [Math.min(...zs), Math.max(...zs)],
+      photoPoseDeg: fr.pose, templateScale: fr.s, shapeRmsFromTemplate: fr.rms,
+      tessellationEdges: FACEMESH_TESSELATION ? FACEMESH_TESSELATION.length : "undefined (expected 2556)",
+      faceOvalEdges: FACEMESH_FACE_OVAL ? FACEMESH_FACE_OVAL.length : "undefined (expected 36)",
+    });
+  } catch (e) { console.warn("[GECO viewer] diagnostics failed", e); }
+
   const vertices = [];
   const uvs = [];
   const confidences = [];
@@ -1213,6 +1227,12 @@ export default function FaceMesh3DViewer({
     const imgH = imgObj ? (imgObj.naturalHeight || imgObj.height || 0) : 0;
     const uvOverride = detectedMesh?.uvs || null;
 
+    console.info("[GECO viewer] mesh source", {
+      engine: modelEngine,
+      source: modelEngine === "anatomical" ? "anatomical template" : detectedMesh ? "MediaPipe landmarks (person-specific)" : "anatomical template FALLBACK (no landmarks detected)",
+      triangles: (detectedMesh && modelEngine !== "anatomical" ? detectedMesh : null)?.triangles?.length ?? null,
+      photoSize: [imgW, imgH],
+    });
     if (modelEngine === "anatomical") {
       return buildAnatomicalFaceMesh(modelData?.face_metadata, covered, uvOverride, imgW, imgH);
     }
