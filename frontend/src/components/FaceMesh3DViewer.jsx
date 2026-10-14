@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as faceMeshPkg from "@mediapipe/face_mesh";
 import { reconstruct3DMM } from "../api";
 import canonicalLandmarks from "../utils/canonicalFaceLandmarks.json";
+import { frontalizeLandmarks } from "../utils/frontalize";
 
 // Robust resolution for CommonJS / ESM / Browser UMD exports
 const _mp =
@@ -32,33 +33,14 @@ function round4(v) {
 function buildMeshFromMediaPipeLandmarks(landmarks, imgWidth = 1, imgHeight = 1) {
   if (!landmarks || landmarks.length < 468) return null;
 
-  // Key landmarks for canonical anatomical orientation
-  const p33 = landmarks[33] || landmarks[133];
-  const p263 = landmarks[263] || landmarks[362];
-  const p13 = landmarks[13];
-  const p14 = landmarks[14];
-
-  // True pixel aspect-ratio calculation:
-  // Converts normalized photo coordinates to true pixels before computing metric scale
+  // Image size in pixels (landmarks are normalised: x by width, y by height, z in units of width)
   const w = imgWidth > 0 ? imgWidth : 1;
   const h = imgHeight > 0 ? imgHeight : 1;
 
-  const eyeLeftX = p33.x * w;
-  const eyeLeftY = p33.y * h;
-  const eyeRightX = p263.x * w;
-  const eyeRightY = p263.y * h;
-
-  const eyeMidX = (eyeLeftX + eyeRightX) / 2;
-  const eyeMidY = (eyeLeftY + eyeRightY) / 2;
-  const ipdPx = Math.hypot(eyeRightX - eyeLeftX, eyeRightY - eyeLeftY) || (w * 0.28);
-
-  // Canonical outer intercanthal distance is 0.28 units (~63mm)
-  const metricScale = 0.28 / ipdPx;
-
-  // Dynamic expression adaptation: lowers lower lip and jaw when mouth is open
-  const mouthOpen = (p13 && p14)
-    ? Math.max(0, Math.hypot((p14.x - p13.x) * w, (p14.y - p13.y) * h) * metricScale - 0.016)
-    : 0;
+  // Remove the photo's head pose: fit a 3D similarity from the canonical template to the observed landmarks and map the
+  // observation back into the frontal template frame. x, y AND z then come from the person's own geometry. (Previously x/y
+  // were taken from the posed photo but z from the generic frontal template, which sheared the mesh on any non-frontal photo.)
+  const fr = frontalizeLandmarks(landmarks, w, h, canonicalLandmarks);
 
   const vertices = [];
   const uvs = [];
@@ -66,25 +48,12 @@ function buildMeshFromMediaPipeLandmarks(landmarks, imgWidth = 1, imgHeight = 1)
   const isCranial = [];
 
   for (let i = 0; i < 468; i++) {
-    const c = canonicalLandmarks[i];
     const p = landmarks[i];
 
-    // Direct projective alignment:
-    // (X, Y) matches (p.x, p.y) with 0% distortion, locking eyes, nose, lips and chin to photo pixels
-    const x = round4((p.x * w - eyeMidX) * metricScale);
-    let y = round4(-(p.y * h - eyeMidY) * metricScale + 0.035);
-
-    // Anatomical human depth anchored by c[2] (nose +0.135, orbits +0.003, jaw -0.155)
-    // with subtle user depth modulation (prevents snout/balloon deformation)
-    const userZDelta = p.z !== undefined ? Math.max(-0.025, Math.min(0.025, -p.z * w * metricScale * 0.20)) : 0;
-    const z = round4(c[2] + userZDelta);
-
-    if (mouthOpen > 0.005) {
-      if (i === 14 || i === 17 || i === 152 || (i >= 87 && i <= 88) || (i >= 317 && i <= 318)) {
-        y -= mouthOpen * 0.7;
-      }
-    }
-
+    const g = fr.verts[i];
+    const x = round4(g[0]);
+    const y = round4(g[1]);
+    const z = round4(g[2]);
     vertices.push([x, y, z]);
     uvs.push({
       u: round4(Math.max(0.001, Math.min(0.999, p.x))),
