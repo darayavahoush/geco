@@ -337,6 +337,35 @@ function detectFaceLandmarks(imageSource) {
   });
 }
 
+async function runOneDetection(fm, imageSource) {
+  // Prepare a canvas copy so the detector always sees the image in its displayed orientation.
+  let frame = imageSource;
+  if (frame instanceof HTMLImageElement || (frame && frame.tagName === "IMG")) {
+    const canvas = document.createElement("canvas");
+    const nw = frame.naturalWidth || frame.width || 448;
+    const nh = frame.naturalHeight || frame.height || 448;
+    canvas.width = nw;
+    canvas.height = nh;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(frame, 0, 0, nw, nh);
+    frame = canvas;
+  }
+  // The results callback fires for THIS frame before send() resolves, so we read the result after awaiting send().
+  // (Previously a 4.5 s timer resolved null on slow cold starts, and a late result could be delivered to the
+  // next queued photo's callback.)
+  let result = null;
+  fm.onResults((results) => {
+    result = results && results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0
+      ? results.multiFaceLandmarks[0] : null;
+  });
+  let timer;
+  const timeout = new Promise((res) => { timer = setTimeout(() => res("timeout"), 30000); });
+  const outcome = await Promise.race([fm.send({ image: frame }).then(() => "done"), timeout]);
+  clearTimeout(timer);
+  if (outcome === "timeout") console.warn("[GECO viewer] MediaPipe detection timed out");
+  return outcome === "done" ? result : null;
+}
+
 async function drainMediaPipeQueue() {
   if (isProcessingMediaPipeQueue || mediaPipeQueue.length === 0) return;
   isProcessingMediaPipeQueue = true;
@@ -346,43 +375,12 @@ async function drainMediaPipeQueue() {
     const fm = await getInitializedFaceMesh();
     if (!fm) {
       item.resolve(null);
-      isProcessingMediaPipeQueue = false;
-      drainMediaPipeQueue();
-      return;
+    } else {
+      let lm = await runOneDetection(fm, item.imageSource);
+      if (!lm) lm = await runOneDetection(fm, item.imageSource); // first run after WASM init sometimes returns nothing
+      if (!lm) console.warn("[GECO viewer] MediaPipe found no face landmarks in this photo");
+      item.resolve(lm);
     }
-
-    let resolved = false;
-    const timer = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        item.resolve(null);
-      }
-    }, 4500);
-
-    fm.onResults((results) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timer);
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        item.resolve(results.multiFaceLandmarks[0]);
-      } else {
-        item.resolve(null);
-      }
-    });
-
-    let frame = item.imageSource;
-    if (frame instanceof HTMLImageElement || (frame && frame.tagName === "IMG")) {
-      const canvas = document.createElement("canvas");
-      const nw = frame.naturalWidth || frame.width || 448;
-      const nh = frame.naturalHeight || frame.height || 448;
-      canvas.width = nw;
-      canvas.height = nh;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(frame, 0, 0, nw, nh);
-      frame = canvas;
-    }
-
-    await fm.send({ image: frame });
   } catch (err) {
     console.warn("MediaPipe send warning:", err);
     item.resolve(null);
@@ -1185,6 +1183,7 @@ export default function FaceMesh3DViewer({
     if (!img || !img.width || !img.height) return;
 
     let active = true;
+    setDetectedMesh(null); // never keep a mesh built from a previous photo
     setIsMeshDetecting(true);
 
     detectFaceLandmarks(img)
@@ -1197,6 +1196,7 @@ export default function FaceMesh3DViewer({
             const imgH = img.naturalHeight || img.height || 1;
             const m = buildMeshFromMediaPipeLandmarks(landmarks, imgW, imgH);
             if (m) {
+              m.detectedFor = img; // only valid for this exact photo
               setDetectedMesh(m);
             }
           } catch (e) {
@@ -1225,19 +1225,20 @@ export default function FaceMesh3DViewer({
     const imgObj = loadedImages.front;
     const imgW = imgObj ? (imgObj.naturalWidth || imgObj.width || 0) : 0;
     const imgH = imgObj ? (imgObj.naturalHeight || imgObj.height || 0) : 0;
-    const uvOverride = detectedMesh?.uvs || null;
+    const validDetected = detectedMesh && detectedMesh.detectedFor === loadedImages.front ? detectedMesh : null;
+    const uvOverride = validDetected?.uvs || null;
 
     console.info("[GECO viewer] mesh source", {
       engine: modelEngine,
-      source: modelEngine === "anatomical" ? "anatomical template" : detectedMesh ? "MediaPipe landmarks (person-specific)" : "anatomical template FALLBACK (no landmarks detected)",
-      triangles: (detectedMesh && modelEngine !== "anatomical" ? detectedMesh : null)?.triangles?.length ?? null,
+      source: modelEngine === "anatomical" ? "anatomical template" : validDetected ? "MediaPipe landmarks (person-specific)" : "anatomical template FALLBACK (no landmarks detected)",
+      triangles: (validDetected && modelEngine !== "anatomical" ? validDetected : null)?.triangles?.length ?? null,
       photoSize: [imgW, imgH],
     });
     if (modelEngine === "anatomical") {
       return buildAnatomicalFaceMesh(modelData?.face_metadata, covered, uvOverride, imgW, imgH);
     }
-    if (detectedMesh) {
-      return detectedMesh;
+    if (validDetected) {
+      return validDetected;
     }
     return buildAnatomicalFaceMesh(modelData?.face_metadata, covered, uvOverride, imgW, imgH);
   }, [modelEngine, backend3DMMMesh, detectedMesh, modelData, photos, loadedImages.front]);
@@ -1547,9 +1548,11 @@ export default function FaceMesh3DViewer({
               ? `✓ PyTorch 3DMM (${mesh.vertices.length} Verts)`
               : modelEngine === "anatomical"
               ? "✓ Canonical 468 (1176 Polygons)"
-              : detectedMesh
+              : detectedMesh && detectedMesh.detectedFor === loadedImages.front
               ? "✓ MediaPipe 468 (1176 Polygons)"
-              : "✓ Canonical 468 (1176 Polygons)"}
+              : isMeshDetecting
+              ? "… detecting face landmarks"
+              : "⚠ Generic template head — no face landmarks found in this photo"}
           </span>
         </div>
 
