@@ -995,6 +995,130 @@ async def get_face_model_info():
     )
 
 
+# ── Face IDENTIFICATION (1:N): enrol people, then ask "who is this?" ──
+# Gallery of embedding templates lives in one .npz (GECO_GALLERY, default ./gallery.npz).
+# Head: GECO_FACE_HEAD, else face_head_robust.pt (glasses/beard-robust) if present, else the ArcFace head.
+import os  # noqa: E402
+import threading  # noqa: E402
+
+from geco.identify import (  # noqa: E402
+    DEFAULT_MARGIN,
+    DEFAULT_THRESHOLD,
+    Gallery,
+    NoFaceFound,
+    enroll_photos,
+    load_embedder,
+    make_embed_fn,
+)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_GALLERY_PATH = Path(os.environ.get("GECO_GALLERY", _REPO_ROOT / "gallery.npz"))
+_gallery_lock = threading.Lock()
+_ident_embedder = None
+_ident_embed_fn = None
+
+
+def _get_ident_embed():
+    global _ident_embedder, _ident_embed_fn
+    if not _TORCH_AVAILABLE:
+        raise HTTPException(status_code=503, detail="PyTorch not installed in active environment.")
+    if _ident_embedder is None:
+        head = os.environ.get("GECO_FACE_HEAD")
+        if not head:
+            robust = _REPO_ROOT / "face_head_robust.pt"
+            head = str(robust) if robust.exists() else None
+        try:
+            _ident_embedder = load_embedder(head)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        _ident_embed_fn = make_embed_fn(_ident_embedder)
+    return _ident_embedder, _ident_embed_fn
+
+
+class IdentifyMatchOut(BaseModel):
+    name: str
+    score: float
+    n_templates: int
+    best_source: str
+
+
+class IdentifyResponse(BaseModel):
+    verdict: str  # "match" | "ambiguous" | "unknown" | "no_face"
+    name: str | None = None
+    score: float | None = None
+    margin: float | None = None
+    threshold: float
+    ranking: list[IdentifyMatchOut] = []
+
+
+@app.post("/api/enroll")
+def enroll(
+    name: str = Form(...),
+    photos: list[UploadFile] = File(...),
+    synthetic: int = Form(0),
+):
+    """Enrol one person from one or more photos. synthetic=1..3 also stores glasses / +beard / +both variants."""
+    import tempfile
+
+    embedder, _ = _get_ident_embed()
+    paths = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, up in enumerate(photos):
+            p = Path(tmp) / f"{i}_{Path(up.filename or 'photo.jpg').name}"
+            p.write_bytes(up.file.read())
+            paths.append(p)
+        with _gallery_lock:
+            g = Gallery.load(_GALLERY_PATH)
+            added, skipped = enroll_photos(g, embedder, name.strip(), paths, synthetic_per_photo=max(0, min(3, synthetic)))
+            if added:
+                g.save(_GALLERY_PATH)
+    return {"name": name.strip(), "templates_added": added, "skipped": skipped, "people": g.people()}
+
+
+@app.post("/api/identify", response_model=IdentifyResponse)
+def identify(
+    photo: UploadFile = File(...),
+    threshold: float = Form(DEFAULT_THRESHOLD),
+    margin: float = Form(DEFAULT_MARGIN),
+):
+    """Who is in this photo? Open-set: returns verdict 'unknown' below the threshold, 'ambiguous' if two people are too close."""
+    _, embed = _get_ident_embed()
+    try:
+        img = Image.open(io.BytesIO(photo.file.read())).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read image: {exc}")
+    with _gallery_lock:
+        g = Gallery.load(_GALLERY_PATH)
+    if not len(g):
+        raise HTTPException(status_code=409, detail="Gallery is empty -- enrol people first (POST /api/enroll).")
+    try:
+        emb, _meta = embed(img)
+    except NoFaceFound:
+        return IdentifyResponse(verdict="no_face", threshold=threshold)
+    r = g.identify(emb, threshold=threshold, margin=margin)
+    return IdentifyResponse(
+        verdict=r.verdict, name=r.name, score=r.score, margin=None if r.margin == float("inf") else r.margin,
+        threshold=threshold, ranking=[IdentifyMatchOut(**m.__dict__) for m in r.ranking],
+    )
+
+
+@app.get("/api/gallery")
+def gallery_list():
+    with _gallery_lock:
+        return Gallery.load(_GALLERY_PATH).people()
+
+
+@app.delete("/api/gallery/{name}")
+def gallery_remove(name: str):
+    with _gallery_lock:
+        g = Gallery.load(_GALLERY_PATH)
+        n = g.remove(name)
+        if n == 0:
+            raise HTTPException(status_code=404, detail=f"{name} not in gallery")
+        g.save(_GALLERY_PATH)
+    return {"removed_templates": n, "people": g.people()}
+
+
 # ── Serve the built React frontend (combined single-container deployment) ──
 # In local dev you run the Vite dev server separately and this path won't
 # exist, so the mount is skipped and only the API is served on :8000.

@@ -29,3 +29,8 @@ training_log.txt
 # Env
 .env
 models/
+
+# Biometric templates / personal photos -- never commit
+gallery*.npz
+people/
+cache/

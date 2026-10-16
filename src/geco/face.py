@@ -89,6 +89,16 @@ class FaceEmbedder:
         emb, _ = self.embed_with_aligned(img)
         return emb
 
+    def pooled_from_aligned(self, aligned: Image.Image) -> torch.Tensor:
+        """Frozen-backbone features [768] for an ALREADY-aligned 224x224 crop (skips detection).
+        Used for synthetic-appearance training views, which are edited after alignment."""
+        return self._global_embedding(preprocess_image(aligned, self.device)).squeeze(0)
+
+    def embed_aligned(self, aligned: Image.Image) -> torch.Tensor:
+        """[EMBEDDING_DIM] L2-normalized embedding for an already-aligned 224x224 crop."""
+        with torch.no_grad():
+            return self.head(self.pooled_from_aligned(aligned).unsqueeze(0)).squeeze(0)
+
     def embed_batch_from_tensors(self, pooled_feats: torch.Tensor) -> torch.Tensor:
         """For training: takes PRECOMPUTED global backbone embeddings [B, 768] (since the
         backbone is frozen, its output is fixed per-image and worth caching once rather
