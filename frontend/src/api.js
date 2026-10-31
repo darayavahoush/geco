@@ -15,6 +15,11 @@ async function smartFetch(path, options = {}) {
     try {
       const res = await fetch(url, options);
       if (res.ok) {
+        // If the server returned HTML (like Vite SPA index.html fallback), skip to direct backend
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("text/html") && !path.endsWith(".html") && path !== "/") {
+          continue;
+        }
         return res;
       }
       if ([404, 405, 502, 503].includes(res.status)) {
@@ -66,11 +71,21 @@ export async function getKeypointMatch({ sessionId, pixelX, pixelY, imageSize })
 
 export async function checkHealth() {
   try {
-    const res = await smartFetch(`/health`);
+    const res = await smartFetch(`/api/health`);
     if (!res.ok) throw new Error("Backend unreachable");
-    return res.json();
+    const data = await res.json();
+    if (data.status === "ok") return data;
+    throw new Error("Backend reported non-ok status");
   } catch (err) {
-    return { status: "offline" };
+    // Also try direct /health fallback
+    try {
+      const resFallback = await smartFetch(`/health`);
+      if (resFallback.ok) {
+        const data = await resFallback.json();
+        if (data.status === "ok") return data;
+      }
+    } catch (_) {}
+    throw err;
   }
 }
 

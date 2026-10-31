@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="dotGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e"/>
+      <stop offset="100%" stop-color="#fb923c"/>
+    </linearGradient>
+  </defs>
+  <!-- Background Rounded Rect -->
+  <rect width="64" height="64" rx="14" fill="#0b0f19"/>
+  <!-- Subtly glowing border -->
+  <rect width="62" height="62" x="1" y="1" rx="13" fill="none" stroke="url(#grad)" stroke-width="1.5" stroke-opacity="0.5"/>
+  <!-- Neural Correspondence Transport Bridge -->
+  <path d="M 16 38 C 24 20, 40 20, 48 26" fill="none" stroke="url(#grad)" stroke-width="2.5" stroke-dasharray="3 2" stroke-linecap="round"/>
+  <!-- Nodes -->
+  <circle cx="16" cy="38" r="4.5" fill="url(#dotGrad)"/>
+  <circle cx="48" cy="26" r="4.5" fill="#38bdf8"/>
+  <!-- GC Monogram -->
+  <text x="32" y="52" fill="#e2e8f0" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-weight="800" font-size="15" text-anchor="middle" letter-spacing="0.5">GC</text>
+</svg>

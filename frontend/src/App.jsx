@@ -25,7 +25,13 @@ export default function App() {
 
   useEffect(() => {
     checkHealth()
-      .then(() => setBackendStatus("online"))
+      .then((data) => {
+        if (data && (data.status === "ok" || data.status === "healthy")) {
+          setBackendStatus("online");
+        } else {
+          setBackendStatus("offline");
+        }
+      })
       .catch(() => setBackendStatus("offline"));
   }, []);
 
