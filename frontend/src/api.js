@@ -1,10 +1,11 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API_URL = import.meta.env.VITE_API_URL || "";
 
 async function smartFetch(path, options = {}) {
   const urls = [
+    path, // 1. Relative URL proxied by Vite dev server or current origin
     API_URL ? `${API_URL}${path}` : null,
     `http://127.0.0.1:8000${path}`,
-    path,
+    `http://localhost:8000${path}`,
   ].filter(Boolean);
 
   const uniqueUrls = [...new Set(urls)];
