@@ -19,12 +19,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import ot
 import torch
-import torch.nn.functional as F
 from PIL import Image
 
-from .confidence import compute_adaptive_dustbin, compute_patch_confidence_v2
 from .features import IMG_SIZE, get_device, map_point_to_model_space
 from .features import preprocess_image as preprocess_image_v2
 from .features import extract_multiscale_features as extract_multiscale_features_v2
@@ -34,7 +31,7 @@ from .features_v3 import (
     extract_multiscale_features_v3,
     preprocess_image_v3,
 )
-from .matching import MatchResult, get_confidence_aware_marginals
+from .matching import MatchResult, match_from_features
 
 
 def map_point_from_model_space(
@@ -54,77 +51,9 @@ def map_point_from_model_space(
     return orig_x, orig_y
 
 
-def _match_from_features(
-    src_feat: torch.Tensor,
-    trg_feat: torch.Tensor,
-    grid_size: int,
-    alpha: float,
-    z_base: float,
-    z_range: float,
-    reg: float,
-) -> MatchResult:
-    """The shared tail of geco_match (confidence -> marginals -> cost matrix ->
-    Sinkhorn), factored out so both DINOv2 and DINOv3 feature maps can feed
-    the exact same OT logic. Mirrors matching.geco_match line for line from
-    the point features are already extracted.
-    """
-    device = src_feat.device
-    conf_src = compute_patch_confidence_v2(src_feat)
-    conf_trg = compute_patch_confidence_v2(trg_feat)
-
-    mu, nu = get_confidence_aware_marginals(conf_src, conf_trg, alpha=alpha)
-    dustbin_src = compute_adaptive_dustbin(conf_src, z_base, z_range)
-    dustbin_trg = compute_adaptive_dustbin(conf_trg, z_base, z_range)
-
-    b, d, h, w = src_feat.shape
-    src_flat = F.normalize(src_feat.reshape(d, -1).T, dim=-1)
-    trg_flat = F.normalize(trg_feat.reshape(d, -1).T, dim=-1)
-    cos_sim = torch.mm(src_flat, trg_flat.T)
-
-    conf_matrix = (conf_src.flatten().unsqueeze(1) * conf_trg.flatten().unsqueeze(0)).to(
-        cos_sim.device
-    )
-    weighted_sim = cos_sim * conf_matrix
-
-    n, m = weighted_sim.shape
-    dustbin_col = dustbin_src.unsqueeze(1).expand(n, 1)
-    dustbin_row = dustbin_trg.unsqueeze(0).expand(1, m)
-    dustbin_corner = torch.tensor([[z_base]], device=weighted_sim.device)
-
-    cost_matrix = torch.cat(
-        [
-            torch.cat([weighted_sim, dustbin_col], dim=1),
-            torch.cat([dustbin_row, dustbin_corner], dim=1),
-        ],
-        dim=0,
-    )
-
-    cost_np = (2 - cost_matrix).cpu().float().numpy()
-    transport_plan = ot.sinkhorn(
-        mu.cpu().float().numpy(),
-        nu.cpu().float().numpy(),
-        cost_np,
-        reg=reg,
-        numItermax=500,
-        stopThr=1e-9,
-    )
-    transport_plan = torch.tensor(transport_plan, device=device)
-
-    entropy = -(transport_plan * torch.log(transport_plan + 1e-8)).sum().item()
-    patch_rows = transport_plan[:-1, :-1]
-    row_sums = patch_rows.sum(dim=1, keepdim=True)
-    normalized_rows = patch_rows / (row_sums + 1e-8)
-    mean_conf = normalized_rows.max(dim=1)[0].mean().item()
-
-    return MatchResult(
-        transport_plan=transport_plan,
-        cos_sim=cos_sim,
-        conf_src=conf_src,
-        conf_trg=conf_trg,
-        grid_size=grid_size,
-        entropy=entropy,
-        mean_confidence=mean_conf,
-    )
+def _match_from_features(src_feat, trg_feat, grid_size, alpha, z_base, z_range, reg) -> MatchResult:
+    """Back-compat shim: the shared implementation lives in matching.match_from_features."""
+    return match_from_features(src_feat, trg_feat, alpha, z_base, z_range, reg)
 
 
 def geco_match_v2(

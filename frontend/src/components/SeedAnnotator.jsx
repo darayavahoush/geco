@@ -12,8 +12,15 @@ export default function SeedAnnotator({ label, onRemove, file, previewUrl, onFil
     const name = pendingName.trim();
     if (!name) return;
     const box = imgRef.current.getBoundingClientRect();
-    const x = Math.round(((e.clientX - box.left) / box.width) * 518);
-    const y = Math.round(((e.clientY - box.top) / box.height) * 518);
+    // The backend resizes the SHORTER side to 518 and center-crops, so map the click
+    // through the same transform (dividing by the box size alone is only correct for
+    // square images and skews seeds on anything else).
+    const nw = imgRef.current.naturalWidth || box.width;
+    const nh = imgRef.current.naturalHeight || box.height;
+    const scale = 518 / Math.min(nw, nh);
+    const x = Math.round(((e.clientX - box.left) / box.width) * nw * scale - (nw * scale - 518) / 2);
+    const y = Math.round(((e.clientY - box.top) / box.height) * nh * scale - (nh * scale - 518) / 2);
+    if (x < 0 || y < 0 || x > 518 || y > 518) return; // clicked in the cropped-away margin
     onKeypointsChange([...keypoints, { name, x, y, displayX: e.clientX - box.left, displayY: e.clientY - box.top }]);
   }
 
