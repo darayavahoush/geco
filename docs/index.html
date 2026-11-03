@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GECO: confidence-aware semantic correspondence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef1f6;--panel:#fff;--ink:#101a33;--mute:#56607d;--line:#d3d9e6;--blue:#2748f0;--red:#e2403f;--bt:rgba(39,72,240,.12);--rt:rgba(226,64,63,.12);--code:#101a33;--codeink:#dfe6fb;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1325;--panel:#151e37;--ink:#e8ecf8;--mute:#9aa5c6;--line:#27325a;--blue:#8199ff;--red:#ff7b74;--bt:rgba(129,153,255,.16);--rt:rgba(255,123,116,.16);--code:#090e1d;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0d1325;--panel:#151e37;--ink:#e8ecf8;--mute:#9aa5c6;--line:#27325a;--blue:#8199ff;--red:#ff7b74;--bt:rgba(129,153,255,.16);--rt:rgba(255,123,116,.16);--code:#090e1d;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px);scroll-behavior:smooth}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 17px/1.6 "Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+:focus-visible{outline:3px solid var(--blue);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+nav{display:flex;justify-content:space-between;align-items:center;padding:22px 0}
+.logo{font:800 26px "Bricolage Grotesque",sans-serif;letter-spacing:-.02em;text-decoration:none}
+.logo i{font-style:normal;color:var(--blue)}.logo b{color:var(--red);font-weight:800}
+nav a.gh{font-weight:600;font-size:15px;text-decoration:none;border:1.5px solid var(--ink);padding:7px 16px;border-radius:99px}
+nav a.gh:hover{background:var(--ink);color:var(--bg)}
+h1,h2,h3{font-family:"Bricolage Grotesque",sans-serif;letter-spacing:-.03em;line-height:1.02;margin:0}
+h1{font-size:clamp(44px,8.4vw,104px);font-weight:800;max-width:11.5em;margin:36px 0 22px}
+h1 .b{color:var(--blue)}h1 .r{color:var(--red)}
+.lede{font-size:clamp(18px,2.2vw,22px);color:var(--mute);max-width:36em;margin:0 0 40px}
+.demo{background:var(--panel);border:1.5px solid var(--ink);border-radius:22px;padding:18px 18px 14px;box-shadow:8px 8px 0 var(--ink)}
+.demo svg{width:100%;height:auto;display:block;touch-action:none;cursor:crosshair}
+.read{display:flex;flex-wrap:wrap;gap:10px 28px;justify-content:space-between;align-items:center;font:400 14px "JetBrains Mono",monospace;padding:12px 6px 4px;color:var(--mute)}
+.read output{color:var(--ink);min-height:1.5em}
+.read label{display:flex;align-items:center;gap:10px}
+input[type=range]{accent-color:var(--blue);width:150px}
+.cap{display:flex;justify-content:space-between;font:600 14px "Bricolage Grotesque";padding:0 6px}
+.cap span:first-child{color:var(--blue)}.cap span:last-child{color:var(--red);text-align:right}
+section{padding:110px 0 0}
+h2{font-size:clamp(34px,5vw,60px);font-weight:800;max-width:14em;margin-bottom:20px}
+p.sub{color:var(--mute);max-width:38em;margin:0 0 44px}
+.pipe{list-style:none;counter-reset:s;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-top:1.5px solid var(--ink)}
+.pipe li{counter-increment:s;padding:22px 22px 8px 0;position:relative}
+.pipe li+li{padding-left:22px;border-left:1px solid var(--line)}
+.pipe li::before{content:counter(s);font:800 54px "Bricolage Grotesque";color:var(--blue);line-height:1;display:block;margin-bottom:12px}
+.pipe li:nth-child(even)::before{color:var(--red)}
+.pipe h3{font-size:22px;margin-bottom:8px;letter-spacing:-.02em}
+.pipe p{margin:0;color:var(--mute);font-size:15.5px}
+.conf{display:grid;grid-template-columns:1fr 1.25fr;gap:60px;align-items:start}
+.conf dl{margin:0}
+.conf dt{font:800 24px "Bricolage Grotesque";letter-spacing:-.02em;margin-top:26px}
+.conf dt:first-child{margin-top:0}
+.conf dd{margin:6px 0 0;color:var(--mute)}
+.params{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+.p{background:var(--panel);border:1.5px solid var(--line);border-radius:16px;padding:22px 24px}
+.p:nth-child(1){border-top:5px solid var(--blue)}.p:nth-child(2){border-top:5px solid var(--red)}
+.p:nth-child(3){border-top:5px solid var(--red)}.p:nth-child(4){border-top:5px solid var(--blue)}
+.p code,.api code,.k{font-family:"JetBrains Mono",monospace}
+.p code{font-size:20px;font-weight:500}.p small{color:var(--mute);font:400 13px "JetBrains Mono";margin-left:8px}
+.p p{margin:8px 0 0;color:var(--mute);font-size:15.5px}
+.code{position:relative;background:var(--code);color:var(--codeink);border-radius:16px;padding:22px 24px;font:400 14px/1.7 "JetBrains Mono",monospace;overflow-x:auto;margin:0 0 18px;white-space:pre}
+.code button{position:absolute;top:12px;right:12px;font:600 13px "Instrument Sans";background:transparent;color:var(--codeink);border:1px solid rgba(255,255,255,.3);border-radius:99px;padding:4px 12px;cursor:pointer}
+.code button:hover{background:rgba(255,255,255,.12)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.two h3{font-size:24px;margin-bottom:12px}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:15.5px}
+th,td{text-align:left;padding:14px 16px 14px 0;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--mute);font-size:14px;border-bottom:1.5px solid var(--ink)}
+td:first-child code{font-size:13.5px;color:var(--blue);font-weight:500}
+.m{font:600 12px "JetBrains Mono";padding:2px 8px;border-radius:6px;background:var(--bt);color:var(--blue)}
+.m.post{background:var(--rt);color:var(--red)}
+footer{margin-top:130px;border-top:1.5px solid var(--ink);padding:36px 0 56px;display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;color:var(--mute);font-size:15px}
+footer .logo{color:var(--ink)}
+@media(max-width:820px){.pipe{grid-template-columns:1fr 1fr}.pipe li:nth-child(3){padding-left:0;border-left:0}.conf,.two,.params{grid-template-columns:1fr}.conf{gap:36px}section{padding-top:80px}.demo{box-shadow:5px 5px 0 var(--ink)}}
+@media(max-width:480px){.pipe{grid-template-columns:1fr}.pipe li+li{padding-left:0;border-left:0;border-top:1px solid var(--line)}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;scroll-behavior:auto!important}}
+@keyframes flow{to{stroke-dashoffset:-24}}
+#ln{animation:flow 1s linear infinite}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a class="logo" href="#top" aria-label="GECO home"><i>GE</i><b>CO</b></a><a class="gh" href="https://github.com/darayavahoush/geco">View on GitHub</a></nav>
+
+<header id="top">
+<h1>Point at one image. <span class="b">Find</span> it in the <span class="r">other.</span></h1>
+<p class="lede">GECO finds matching points between two different images of the same kind of thing: two birds, two chairs, one object seen from two angles. It uses DINOv2 features and optimal transport, and it knows when to say “no match.”</p>
+
+<div class="demo">
+<div class="cap"><span>Source image</span><span>Target image</span></div>
+<svg id="sv" viewBox="0 0 840 330" role="img" aria-label="Interactive demo. Move the pointer over the left bird to see the matching point on the right bird.">
+<rect x="0" y="0" width="400" height="330" rx="10" fill="var(--bt)"/>
+<rect x="440" y="0" width="400" height="330" rx="10" fill="var(--rt)"/>
+<g id="A" stroke="var(--blue)" stroke-width="3" stroke-linejoin="round" fill="var(--bt)">
+<path id="ab" d="M95 150C100 110 150 90 190 105C240 120 300 150 340 200L372 262L330 236C300 270 230 285 180 268C130 250 90 200 95 150Z"/>
+<path id="ak" d="M96 142L62 158L98 168Z"/>
+<path d="M176 268L172 300M196 270L196 300" fill="none"/>
+<path d="M150 190C190 160 250 190 290 215" fill="none" stroke-dasharray="5 7" opacity=".6"/>
+</g>
+<g id="B" transform="translate(440 0)" stroke="var(--red)" stroke-width="3" stroke-linejoin="round" fill="var(--rt)">
+<path d="M305 150C300 105 250 85 205 100C150 115 100 150 70 190L40 235L88 222C115 262 180 280 230 268C285 252 310 200 305 150Z"/>
+<path d="M304 142L338 160L302 168Z"/>
+<path d="M228 268L226 298M248 262L250 298" fill="none"/>
+<path d="M250 190C210 165 160 190 125 210" fill="none" stroke-dasharray="5 7" opacity=".6"/>
+</g>
+<g id="kp"></g>
+<path id="ln" d="" fill="none" stroke="var(--ink)" stroke-width="2.5" stroke-dasharray="6 6" opacity="0"/>
+<circle id="sp" r="9" fill="var(--blue)" stroke="var(--panel)" stroke-width="3" opacity="0"/>
+<circle id="tp" r="9" fill="var(--red)" stroke="var(--panel)" stroke-width="3" opacity="0"/>
+<circle id="tc" r="22" fill="none" stroke="var(--red)" stroke-width="2" opacity="0"/>
+</svg>
+<div class="read"><output id="out" aria-live="polite">Move over the left bird to match a point.</output>
+<label>Reject below <input id="thr" type="range" min="0" max="80" value="25" aria-label="No-match confidence threshold"> <span id="tv">0.25</span></label></div>
+</div>
+</header>
+
+<section id="how">
+<h2>One pipeline, four steps</h2>
+<p class="sub">Each image becomes a grid of patch descriptors. Matching those two grids is a transport problem, and GECO solves it with a confidence signal added.</p>
+<ol class="pipe">
+<li><h3>Read both images</h3><p>DINOv2 turns each image into patch features, pooled from layers 2, 5, 8 and 11 so both fine detail and overall shape count.</p></li>
+<li><h3>Score each patch</h3><p>Every patch gets a confidence value. Distinctive parts like an eye or a beak score high. Sky and plain background score low.</p></li>
+<li><h3>Solve the transport</h3><p>Sinkhorn optimal transport spreads each source patch across the target patches that look most like it.</p></li>
+<li><h3>Transfer the point</h3><p>Your click becomes a pixel on the target image, or a clear “no match” when nothing earns it.</p></li>
+</ol>
+</section>
+
+<section id="confidence">
+<div class="conf">
+<div>
+<h2>Confidence is the difference</h2>
+<p class="sub" style="margin:0">Standard matching forces every patch onto something. GECO lets weak patches step aside, which keeps bad matches out of your results.</p>
+</div>
+<dl>
+<dt>Re-weighted mass</dt><dd>Distinctive patches carry more weight in the transport plan than generic ones, so the matching is anchored by the parts that matter.</dd>
+<dt>An adaptive dustbin</dt><dd>Each patch has its own “no match” threshold. A low-confidence patch can drop out instead of being pushed onto the wrong spot. Try the slider above to see it.</dd>
+<dt>A scaled cost matrix</dt><dd>Cosine similarity is scaled by confidence before matching, so trustworthy pairs look cheaper than doubtful ones.</dd>
+</dl>
+</div>
+</section>
+
+<section id="params">
+<h2>Four dials, all in the UI</h2>
+<p class="sub">Every parameter is a slider in the web app. Change one, run the match again, and see the difference.</p>
+<div class="params">
+<div class="p"><code>alpha</code><small>0 to 1</small><p>Blends uniform marginals with confidence-weighted ones. At 0 every patch counts equally.</p></div>
+<div class="p"><code>z_base</code><small>no-match cost</small><p>The baseline cost of leaving a patch unmatched when it is fully confident.</p></div>
+<div class="p"><code>z_range</code><small>dustbin spread</small><p>How far a low-confidence patch’s threshold drops, making it easier to reject.</p></div>
+<div class="p"><code>reg</code><small>Sinkhorn</small><p>Entropic regularization. Lower values give sharper matches and slower convergence.</p></div>
+</div>
+</section>
+
+<section id="start">
+<h2>Run it in two minutes</h2>
+<p class="sub">The first request downloads DINOv2 ViT-B/14 weights (about 330 MB). A GPU helps, but the pipeline falls back to CPU or Apple silicon on its own.</p>
+<div class="two">
+<div><h3>Local</h3>
+<div class="code" data-c="cd geco&#10;python -m venv .venv &amp;&amp; source .venv/bin/activate&#10;pip install -e .&#10;pip install -r backend/requirements.txt&#10;uvicorn backend.main:app --reload --port 8000"><button type="button">Copy</button>cd geco
+python -m venv .venv &amp;&amp; source .venv/bin/activate
+pip install -e .
+pip install -r backend/requirements.txt
+uvicorn backend.main:app --reload --port 8000</div>
+<div class="code" data-c="cd geco/frontend&#10;cp .env.example .env&#10;npm install&#10;npm run dev"><button type="button">Copy</button>cd geco/frontend
+cp .env.example .env
+npm install
+npm run dev</div></div>
+<div><h3>Docker</h3>
+<div class="code" data-c="docker compose up --build"><button type="button">Copy</button>docker compose up --build</div>
+<p style="color:var(--mute);margin:0 0 18px">Backend on port 8000, frontend on 5173. For a GPU, enable the <span class="k">deploy.resources</span> block in <span class="k">docker-compose.yml</span> (NVIDIA Container Toolkit required).</p>
+<p style="color:var(--mute);margin:0">Then open <span class="k">localhost:5173</span>, upload two images, press <b style="color:var(--ink)">Run matching</b>, and click the source image.</p></div>
+</div>
+</section>
+
+<section id="api">
+<h2>An API underneath</h2>
+<p class="sub">The web app is a thin layer on a FastAPI service. Interactive docs live at <span class="k">/docs</span>.</p>
+<div class="tw"><table>
+<tr><th>Method</th><th>Path</th><th>What it does</th></tr>
+<tr><td><span class="m">GET</span></td><td><code>/health</code></td><td>Reports liveness, model and device status.</td></tr>
+<tr><td><span class="m post">POST</span></td><td><code>/api/match</code></td><td>Takes <span class="k">src_image</span>, <span class="k">trg_image</span> and parameters. Returns confidence and PCA maps plus a <span class="k">session_id</span>.</td></tr>
+<tr><td><span class="m post">POST</span></td><td><code>/api/keypoint</code></td><td>Takes <span class="k">session_id</span>, <span class="k">pixel_x</span>, <span class="k">pixel_y</span>. Returns the matched pixel on the target.</td></tr>
+<tr><td><span class="m">GET</span></td><td><code>/api/match-heatmap/{id}</code></td><td>Debug view: the full transport heatmap for one source patch.</td></tr>
+</table></div>
+</section>
+
+<section id="eval">
+<h2>Built to be measured</h2>
+<p class="sub" style="margin-bottom:24px">The core is a framework-agnostic Python package in <span class="k">src/geco</span>, with separate modules for features, confidence, matching, keypoints and visualization. To evaluate on PF-PASCAL, SPair-71k and CUB-200-2011, fetch the datasets with one script.</p>
+<div class="code" data-c="./scripts/download_datasets.sh ./datasets"><button type="button">Copy</button>./scripts/download_datasets.sh ./datasets</div>
+</section>
+
+<footer><a class="logo" href="#top"><i>GE</i><b>CO</b></a><span>MIT licensed. Made by <a href="https://github.com/darayavahoush">darayavahoush</a>.</span><a href="https://github.com/darayavahoush/geco">Source on GitHub</a></footer>
+</div>
+
+<script>
+(function(){
+var A=[["beak",64,158],["eye",128,135],["crown",150,104],["wing",210,190],["belly",170,240],["tail",368,260],["foot",176,300]];
+var B=[["beak",338,160],["eye",268,132],["crown",250,96],["wing",190,185],["belly",235,242],["tail",44,232],["foot",228,298]];
+var sv=document.getElementById("sv"),kp=document.getElementById("kp"),ln=document.getElementById("ln"),
+sp=document.getElementById("sp"),tp=document.getElementById("tp"),tc=document.getElementById("tc"),
+out=document.getElementById("out"),thr=document.getElementById("thr"),tv=document.getElementById("tv"),
+ab=document.getElementById("ab"),ak=document.getElementById("ak"),NS="http://www.w3.org/2000/svg";
+function dot(x,y,c){var e=document.createElementNS(NS,"circle");e.setAttribute("cx",x);e.setAttribute("cy",y);e.setAttribute("r",3.5);e.setAttribute("fill",c);e.setAttribute("opacity",".55");kp.appendChild(e)}
+A.forEach(function(a){dot(a[1],a[2],"var(--blue)")});B.forEach(function(b){dot(440+b[1],b[2],"var(--red)")});
+function map(x,y){var sw=0,dx=0,dy=0,dm=1e9;
+A.forEach(function(a,i){var d=Math.hypot(x-a[1],y-a[2]);dm=Math.min(dm,d);var w=1/(d*d+1);sw+=w;dx+=w*(B[i][1]-a[1]);dy+=w*(B[i][2]-a[2])});
+return{x:x+dx/sw,y:y+dy/sw,c:Math.exp(-dm/70)}}
+function off(){[sp,tp,tc,ln].forEach(function(e){e.setAttribute("opacity",0)})}
+function inside(x,y){var p=new DOMPoint(x,y);return ab.isPointInFill(p)||ak.isPointInFill(p)}
+function move(ev){
+var pt=new DOMPoint(ev.clientX,ev.clientY).matrixTransform(sv.getScreenCTM().inverse()),x=pt.x,y=pt.y;
+if(x<0||x>400||y<0||y>330){off();out.textContent="Move over the left bird to match a point.";return}
+sp.setAttribute("cx",x);sp.setAttribute("cy",y);sp.setAttribute("opacity",1);
+var t=inside(x,y)?map(x,y):null,th=thr.value/100;
+if(!t||t.c<th){tp.setAttribute("opacity",0);tc.setAttribute("opacity",0);ln.setAttribute("opacity",0);
+sp.setAttribute("fill","var(--mute)");
+out.textContent=t?"No match. Confidence "+t.c.toFixed(2)+" is below "+th.toFixed(2)+", so it goes to the dustbin.":"No match. This patch is background, so it goes to the dustbin.";return}
+sp.setAttribute("fill","var(--blue)");
+var tx=440+t.x,ty=t.y;
+tp.setAttribute("cx",tx);tp.setAttribute("cy",ty);tp.setAttribute("opacity",1);
+tc.setAttribute("cx",tx);tc.setAttribute("cy",ty);tc.setAttribute("opacity",.3+.7*t.c);
+ln.setAttribute("d","M"+x+" "+y+"C"+(x+150)+" "+(y-70)+" "+(tx-150)+" "+(ty-70)+" "+tx+" "+ty);
+ln.setAttribute("opacity",.35+.65*t.c);
+out.textContent="("+Math.round(x)+", "+Math.round(y)+") maps to ("+Math.round(t.x)+", "+Math.round(t.y)+"). Confidence "+t.c.toFixed(2)+".";}
+sv.addEventListener("pointermove",move);sv.addEventListener("pointerdown",move);
+sv.addEventListener("pointerleave",function(){off();out.textContent="Move over the left bird to match a point."});
+thr.addEventListener("input",function(){tv.textContent=(thr.value/100).toFixed(2)});
+document.querySelectorAll(".code button").forEach(function(b){b.addEventListener("click",function(){
+var t=b.parentNode.getAttribute("data-c");
+try{navigator.clipboard.writeText(t).then(function(){b.textContent="Copied";setTimeout(function(){b.textContent="Copy"},1500)})}catch(e){b.textContent="Select to copy"}})});
+})();
+</script>
+</body>
+</html>
