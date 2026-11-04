@@ -50,6 +50,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pairs-file", required=True)
     parser.add_argument("--head-weights", default=None, help="Path to trained head .pt file (omit to use an UNTRAINED head, as a baseline)")
+    parser.add_argument("--write-calibration", action="store_true", help="Save threshold + stats next to the head weights")
     args = parser.parse_args()
 
     pairs = load_pairs(Path(args.pairs_file))
@@ -79,28 +80,31 @@ def main():
         if (i + 1) % 20 == 0:
             print(f"  {i + 1}/{len(pairs)} pairs scored")
 
-    print(f"\nScored {len(pairs)} pairs. Sweeping thresholds...\n")
+    import numpy as np
 
-    best_acc, best_thresh = 0.0, 0.0
-    print("=" * 40)
-    print(f"{'threshold':<12}{'accuracy':<12}")
-    print("-" * 40)
-    for thresh_int in range(-100, 101, 5):
-        thresh = thresh_int / 100.0
-        correct = sum((sim >= thresh) == label for sim, label in zip(similarities, labels))
-        acc = correct / len(pairs)
-        marker = ""
-        if acc > best_acc:
-            best_acc, best_thresh = acc, thresh
-            marker = " <-- best so far"
-        if thresh_int % 20 == 0:
-            print(f"{thresh:<12.2f}{acc:<12.4f}{marker}")
-    print("=" * 40)
-    print(f"\nBest threshold: {best_thresh:.2f}  ->  accuracy: {best_acc:.4f}")
+    from geco.calibration import CALIBRATION_FILENAME, calibrate, save_calibration
+
+    report = calibrate(np.array(similarities), np.array(labels))
+    print(f"\nScored {len(pairs)} pairs.\n")
+    print(f"same-person  cosine: mean {report['same_mean']:.3f} +/- {report['same_std']:.3f}")
+    print(f"different    cosine: mean {report['diff_mean']:.3f} +/- {report['diff_std']:.3f}")
+    print(f"AUC {report['auc']:.4f}   EER {report['eer']:.4f}")
+    print(f"threshold {report['threshold']:.3f}  (in-sample accuracy {report['in_sample_accuracy']:.4f})")
     print(
-        f"\nUse this threshold when calling geco.face.verify(embedder, img_a, img_b, "
-        f"threshold={best_thresh:.2f}) on new photos."
+        f"held-out check: threshold {report['heldout_threshold']:.3f} fit on half the pairs "
+        f"-> accuracy {report['heldout_accuracy']:.4f} on the other half  <-- quote THIS number"
     )
+    if abs(report["diff_mean"] - report["same_mean"]) < 2 * report["margin_scale"]:
+        print("WARNING: class means are within 2 std of each other; the embedding separates identities weakly.")
+    if report["diff_mean"] > 0.8:
+        print("WARNING: different-person pairs score > 0.8 on average -- embeddings are crowded into a narrow cone.")
+
+    out = Path(args.head_weights).with_name(CALIBRATION_FILENAME) if args.head_weights else Path(CALIBRATION_FILENAME)
+    if args.write_calibration:
+        save_calibration(report, out)
+        print(f"Wrote calibration to {out}")
+    else:
+        print(f"(pass --write-calibration to save to {out}; the backend reads it at startup)")
 
 
 if __name__ == "__main__":

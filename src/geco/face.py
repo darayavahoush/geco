@@ -38,6 +38,7 @@ except (ImportError, Exception):
 from PIL import Image
 from .face_align import align_face
 
+GEOMETRY_WEIGHT = 0.0  # share of the 3D verdict score taken from mesh geometry (unvalidated -> 0)
 EMBEDDING_DIM = 128  # final face embedding size, after the projection head
 
 
@@ -125,14 +126,41 @@ def verify(embedder: FaceEmbedder, img_a: Image.Image, img_b: Image.Image, thres
     return similarity >= threshold, similarity
 
 
+def verdict_from_margin(margin: float, margin_scale: float = 0.035) -> tuple[str, float]:
+    """(verdict_category, confidence_pct) from distance-to-threshold.
+
+    Bands keep the original 0.025 / 0.005 ratios relative to margin_scale (0.035).
+    The percentage is a distance-from-threshold score, NOT a calibrated probability.
+    """
+    strong, weak = 0.7 * margin_scale, 0.15 * margin_scale
+    if margin >= strong:
+        category = "confident_match"
+    elif margin > weak:
+        category = "likely_match"
+    elif margin <= -strong:
+        category = "confident_different"
+    elif margin < -weak:
+        category = "likely_different"
+    else:
+        category = "ambiguous"
+    scaled = min(1.0, abs(margin) / margin_scale)
+    return category, round(min(99.9, 50.0 + scaled * 49.9), 1)
+
+
 def verify_detailed(
     embedder: FaceEmbedder,
     img_a: Image.Image,
     img_b: Image.Image,
     threshold: float = 0.95,
+    margin_scale: float = 0.035,
 ) -> dict:
     """Returns a rich evaluation dictionary with cosine similarity, L2 Euclidean distance,
-    calibrated verdict, confidence percentage, verdict category, and the aligned face crops.
+    verdict, confidence percentage, verdict category, and the aligned face crops.
+
+    margin_scale is the similarity distance from the threshold at which a verdict counts as
+    "confident" (default 0.035 = the previously hard-coded value; geco.calibration measures
+    a data-driven one). The percentage is a distance-from-threshold score, NOT a calibrated
+    probability.
     """
     emb_a, aligned_a = embedder.embed_with_aligned(img_a)
     emb_b, aligned_b = embedder.embed_with_aligned(img_b)
@@ -146,20 +174,7 @@ def verify_detailed(
     euclidean_distance = float((2.0 - 2.0 * min(1.0, max(-1.0, similarity))) ** 0.5)
 
     # Calibrated category classification on ArcFace margin:
-    if margin >= 0.025:
-        verdict_category = "confident_match"
-    elif margin > 0.005:
-        verdict_category = "likely_match"
-    elif margin <= -0.025:
-        verdict_category = "confident_different"
-    elif margin < -0.005:
-        verdict_category = "likely_different"
-    else:
-        verdict_category = "ambiguous"
-
-    # Scaled confidence
-    scaled_dist = min(1.0, abs(margin) / 0.035)
-    confidence = round(min(99.9, 50.0 + scaled_dist * 49.9), 1)
+    verdict_category, confidence = verdict_from_margin(margin, margin_scale)
 
     return {
         "is_same_person": is_same,
@@ -459,6 +474,7 @@ def reconstruct_3d_face_model(
     if images and len(images) > 0:
         try:
             from .face_align import extract_face_bbox_and_crop
+
             front_idx = 0
             if angles:
                 for idx, a in enumerate(angles):
@@ -584,6 +600,7 @@ def compare_3d_faces(
     angles_a: list[str] | None = None,
     angles_b: list[str] | None = None,
     threshold: float = 0.95,
+    margin_scale: float = 0.035,
 ) -> dict:
     """Performs comprehensive 3D-aware face comparison:
     1. Multi-view ArcFace deep embeddings across all angles of A vs B
@@ -592,6 +609,9 @@ def compare_3d_faces(
     4. Inconsistency diagnosis and sufficiency warnings
     """
     from .face_align import extract_face_bbox_and_crop
+
+    if embedder is None or not _TORCH_AVAILABLE:
+        raise RuntimeError("compare_3d_faces needs a loaded FaceEmbedder (torch + DINOv2 + head weights).")
 
     # 1. Detect and extract exact face crops + embed all views
     embs_a = []
@@ -611,38 +631,18 @@ def compare_3d_faces(
         aligned_crops_b.append(crop)
         face_boxes_b.append(meta)
 
-    if embedder is not None and _TORCH_AVAILABLE:
-        for crop in aligned_crops_a:
-            emb = embedder.embed(crop)
-            embs_a.append(emb)
+    for crop in aligned_crops_a:
+        embs_a.append(embedder.embed(crop))
+    for crop in aligned_crops_b:
+        embs_b.append(embedder.embed(crop))
 
-        for crop in aligned_crops_b:
-            emb = embedder.embed(crop)
-            embs_b.append(emb)
+    # Multi-view pairwise similarity matrix
+    pairwise_matrix = [[round(float(torch.dot(ea, eb).item()), 4) for eb in embs_b] for ea in embs_a]
 
-        # Multi-view pairwise similarity matrix
-        pairwise_matrix = []
-        for ea in embs_a:
-            row = []
-            for eb in embs_b:
-                row.append(round(float(torch.dot(ea, eb).item()), 4))
-            pairwise_matrix.append(row)
-
-        # Multi-view pooled embedding for Identity A and Identity B
-        stacked_a = torch.stack(embs_a, dim=0).mean(dim=0)
-        pooled_a = F.normalize(stacked_a, dim=-1)
-        stacked_b = torch.stack(embs_b, dim=0).mean(dim=0)
-        pooled_b = F.normalize(stacked_b, dim=-1)
-
-        deep_similarity = float(torch.dot(pooled_a, pooled_b).item())
-    else:
-        # Fallback when torch is not loaded: compute pixel & chromaticity divergence
-        import numpy as np
-        arr_a = np.array(aligned_crops_a[0].convert("L"), dtype=float)
-        arr_b = np.array(aligned_crops_b[0].convert("L"), dtype=float)
-        mean_diff = float(np.mean(np.abs(arr_a - arr_b)) / 255.0)
-        deep_similarity = round(max(0.60, min(0.99, 1.0 - mean_diff * 0.75)), 4)
-        pairwise_matrix = [[deep_similarity for _ in images_b] for _ in images_a]
+    # Multi-view pooled embedding for Identity A and Identity B
+    pooled_a = F.normalize(torch.stack(embs_a, dim=0).mean(dim=0), dim=-1)
+    pooled_b = F.normalize(torch.stack(embs_b, dim=0).mean(dim=0), dim=-1)
+    deep_similarity = float(torch.dot(pooled_a, pooled_b).item())
 
     # 2. Reconstruct 3D Models
     model_a = reconstruct_3d_face_model(images_a, angles_a)
@@ -659,33 +659,26 @@ def compare_3d_faces(
     mean_dev = sum(vertex_deviations) / max(1, len(vertex_deviations))
     geometric_similarity = round(max(0.0, 1.0 - mean_dev * 3.5) * 100.0, 1)
 
-    # Fused similarity: deep ArcFace embedding (90%) + normalized 3D geometry (10%)
-    fused_similarity = round(0.90 * deep_similarity + 0.10 * (geometric_similarity / 100.0 * 0.2 + 0.8), 4)
-    # Clamp to reasonable bounds
+    # Decision score. The threshold is calibrated on the DEEP cosine similarity alone
+    # (see geco.calibration), so the verdict must use that same quantity. The geometric
+    # term is reported but carries GEOMETRY_WEIGHT = 0 until it is validated: the face-
+    # difference paper measures geometry-only AUC 0.71 vs ~0.99 for deep embeddings, and
+    # the old blend (0.9*deep + 0.1*(0.8..1.0)) silently added a ~+0.09 offset that moved
+    # every score relative to the calibrated threshold.
+    fused_similarity = round(
+        (1.0 - GEOMETRY_WEIGHT) * deep_similarity + GEOMETRY_WEIGHT * (geometric_similarity / 100.0), 4
+    )
     fused_similarity = max(-1.0, min(1.0, fused_similarity))
 
     is_same = fused_similarity >= threshold
     margin = fused_similarity - threshold
     cosine_dist = max(0.0, 1.0 - fused_similarity)
     euclidean_dist = float((2.0 - 2.0 * min(1.0, max(-1.0, fused_similarity))) ** 0.5)
-
-    if margin >= 0.025:
-        verdict_category = "confident_match"
-    elif margin > 0.005:
-        verdict_category = "likely_match"
-    elif margin <= -0.025:
-        verdict_category = "confident_different"
-    elif margin < -0.005:
-        verdict_category = "likely_different"
-    else:
-        verdict_category = "ambiguous"
-
-    scaled_dist = min(1.0, abs(margin) / 0.035)
-    confidence = round(min(99.9, 50.0 + scaled_dist * 49.9), 1)
+    verdict_category, confidence = verdict_from_margin(margin, margin_scale)
 
     # Structural inconsistencies diagnosis between Identity A and Identity B
     structural_diffs = []
-    if abs(deep_similarity) < threshold:
+    if deep_similarity < threshold:
         structural_diffs.append("Deep ArcFace Hypersphere Divergence: Embeddings occupy separated clusters on the unit sphere.")
     if abs(model_a["anthropometrics"]["nose_protrusion_mm"] - model_b["anthropometrics"]["nose_protrusion_mm"]) > 3.0:
         structural_diffs.append("Nasal Bridge Depth: Noticeable deviation in sagittal nasal protrusion between models.")

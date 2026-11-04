@@ -123,32 +123,47 @@ _FACE_HEAD_ARCFACE_PATH = Path(__file__).resolve().parent.parent / "face_head_ar
 _FACE_HEAD_TRIPLET_PATH = Path(__file__).resolve().parent.parent / "face_head.pt"
 _face_embedder: FaceEmbedder | None = None
 _face_threshold: float = 0.95
+_face_margin_scale: float = 0.035
 _face_model_name: str = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
 
 
+def _face_config() -> tuple[float, float, str, dict | None]:
+    """(threshold, margin_scale, model_name, calibration) for the active head, without loading torch.
+    A face_calibration.json next to the head weights (written by
+    scripts/eval/evaluate_face_verification.py --write-calibration) overrides the defaults."""
+    from geco.calibration import CALIBRATION_FILENAME, load_calibration
+
+    if _FACE_HEAD_ARCFACE_PATH.exists():
+        threshold, name = 0.95, "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
+        cal = load_calibration(_FACE_HEAD_ARCFACE_PATH.with_name(CALIBRATION_FILENAME))
+    elif _FACE_HEAD_TRIPLET_PATH.exists():
+        threshold, name = 0.90, "DINOv2 ViT-B/14 + Triplet Head (LFW only, 89.6% accuracy)"
+        cal = None
+    else:
+        return 0.95, 0.035, "3D Anthropometric + ArcFace Metric Head (Offline Mode)", None
+    scale = 0.035
+    if cal:
+        threshold, scale = float(cal["threshold"]), float(cal.get("margin_scale", scale))
+    return threshold, scale, name, cal
+
+
 def _get_face_embedder() -> tuple[FaceEmbedder | None, float, str]:
-    """Lazily loads the trained face projection head. Prioritizes the ArcFace head
-    (99.40% accuracy, calibrated threshold 0.95) if present, and falls back to the triplet
-    loss head (89.60% accuracy, threshold 0.90).
-    """
-    global _face_embedder, _face_threshold, _face_model_name
+    """Lazily loads the trained face projection head (ArcFace preferred, triplet fallback)."""
+    global _face_embedder, _face_threshold, _face_model_name, _face_margin_scale
     if not _TORCH_AVAILABLE:
         return None, 0.95, "3D Anthropometric + ArcFace Metric Head (Offline Mode)"
     if _face_embedder is None:
         head = FaceProjectionHead()
         if _FACE_HEAD_ARCFACE_PATH.exists():
             head.load_state_dict(torch.load(_FACE_HEAD_ARCFACE_PATH, map_location="cpu"))
-            _face_threshold = 0.95
-            _face_model_name = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
         elif _FACE_HEAD_TRIPLET_PATH.exists():
             head.load_state_dict(torch.load(_FACE_HEAD_TRIPLET_PATH, map_location="cpu"))
-            _face_threshold = 0.90
-            _face_model_name = "DINOv2 ViT-B/14 + Triplet Head (LFW only, 89.6% accuracy)"
         else:
             raise HTTPException(
                 status_code=503,
                 detail=f"Face projection head weights not found (expected {_FACE_HEAD_ARCFACE_PATH} or {_FACE_HEAD_TRIPLET_PATH}).",
             )
+        _face_threshold, _face_margin_scale, _face_model_name, _ = _face_config()
         _face_embedder = FaceEmbedder(head=head)
     return _face_embedder, _face_threshold, _face_model_name
 
@@ -620,23 +635,11 @@ async def verify_face(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not read uploaded images: {exc}")
 
-    if embedder is not None:
-        detail = verify_detailed(embedder, img_a, img_b, threshold=effective_threshold)
-        aligned_a_b64 = _image_to_base64_jpeg(detail["aligned_a"])
-        aligned_b_b64 = _image_to_base64_jpeg(detail["aligned_b"])
-    else:
-        aligned_a_b64 = _image_to_base64_jpeg(img_a.resize((224, 224)))
-        aligned_b_b64 = _image_to_base64_jpeg(img_b.resize((224, 224)))
-        detail = {
-            "is_same_person": True,
-            "similarity": 0.85,
-            "threshold": effective_threshold,
-            "margin": round(0.85 - effective_threshold, 4),
-            "confidence": 98.0,
-            "verdict_category": "confident_match",
-            "cosine_distance": 0.15,
-            "euclidean_distance": 0.54,
-        }
+    if embedder is None:
+        raise HTTPException(status_code=503, detail="Face verification model is unavailable (PyTorch / weights not loaded).")
+    detail = verify_detailed(embedder, img_a, img_b, threshold=effective_threshold, margin_scale=_face_margin_scale)
+    aligned_a_b64 = _image_to_base64_jpeg(detail["aligned_a"])
+    aligned_b_b64 = _image_to_base64_jpeg(detail["aligned_b"])
 
     model_a_dict = reconstruct_3d_face_model([img_a], ["front"])
     model_b_dict = reconstruct_3d_face_model([img_b], ["front"])
@@ -696,6 +699,8 @@ async def verify_face_3d(
         except Exception:
             parsed_angles_b = [b.strip() for b in angles_b.split(",") if b.strip()]
 
+    if embedder is None:
+        raise HTTPException(status_code=503, detail="Face verification model is unavailable (PyTorch / weights not loaded).")
     res = compare_3d_faces(
         embedder,
         images_a,
@@ -703,6 +708,7 @@ async def verify_face_3d(
         angles_a=parsed_angles_a,
         angles_b=parsed_angles_b,
         threshold=effective_threshold,
+        margin_scale=_face_margin_scale,
     )
 
     crops_a_b64 = [_image_to_base64_jpeg(img) for img in res["aligned_crops_a"]]
@@ -1016,15 +1022,7 @@ async def get_face_samples():
 @app.get("/api/face-model-info", response_model=FaceModelInfoResponse)
 async def get_face_model_info():
     """Returns metadata, architecture specs, and benchmark metrics for the active face model."""
-    threshold = 0.95
-    model_name = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
-    if _FACE_HEAD_ARCFACE_PATH.exists():
-        threshold = 0.95
-        model_name = "DINOv2 ViT-B/14 + ArcFace Head (LFW + YTF 500 IDs, 99.4% accuracy)"
-    elif _FACE_HEAD_TRIPLET_PATH.exists():
-        threshold = 0.90
-        model_name = "DINOv2 ViT-B/14 + Triplet Head (LFW only, 89.6% accuracy)"
-
+    threshold, _, model_name, calibration = _face_config()
     is_arcface = "ArcFace" in model_name
     return FaceModelInfoResponse(
         model_name=model_name,
@@ -1032,9 +1030,16 @@ async def get_face_model_info():
         projection_head="768 -> 256 (ReLU) -> 128 (L2 unit sphere normalization)",
         calibrated_threshold=threshold,
         benchmark_accuracy=(
-            "99.40% on 500-pair held-out benchmark (TP: 249/250, TN: 248/250)"
-            if is_arcface
-            else "89.60% on 500-pair held-out benchmark"
+            (
+                f"{calibration['heldout_accuracy']:.2%} held-out accuracy, AUC {calibration['auc']:.4f}, "
+                f"EER {calibration['eer']:.2%} on {calibration['n_pairs']} pairs"
+            )
+            if calibration
+            else (
+                "99.40% on 500-pair held-out benchmark (TP: 249/250, TN: 248/250)"
+                if is_arcface
+                else "89.60% on 500-pair held-out benchmark"
+            )
         ),
         dataset_summary=(
             "Trained on combined LFW + YouTube Faces (YTF) corpus: 2,163 identities, 17,385 frames"
